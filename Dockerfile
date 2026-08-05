@@ -19,8 +19,8 @@ RUN mkdir -p src && echo 'fn main() { println!("dummy"); }' > src/main.rs && \
     cargo build --release && \
     # 保留依赖产物，只删除 dummy 的 homepage 二进制与它的指纹，
     # 真实编译时 cargo 会重建二进制但复用所有依赖。
-    rm -f target/release/homepage && \
-    find target/release -name 'homepage-*' -exec rm -f {} +
+	    rm -f target/release/homepage && \
+	    find target/release -depth -name 'homepage-*' -exec rm -rf {} +
 
 # ---- 真实编译 ----
 # frontend-dist/index.html 由 include_str! 在编译期嵌入，必须存在。
