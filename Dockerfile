@@ -5,7 +5,7 @@
 
 # ---------- 构建阶段 ----------
 # rust:alpine 默认以 musl 工具链编译，产出即为静态二进制，无需额外 target。
-FROM docker.io/library/rust:1.83-alpine AS builder
+FROM docker.io/library/rust:1.95-alpine AS builder
 
 # musl 链接所需的 libc-dev（alpine 基础镜像已含 musl，这里补 headers）。
 RUN apk add --no-cache musl-dev

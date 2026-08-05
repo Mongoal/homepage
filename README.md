@@ -49,7 +49,7 @@ docker build --platform linux/amd64 -t local/homepage:latest -f Dockerfile .
 产物镜像名 `local/homepage:latest`，`docker compose` 的 `image:` 字段指向它即可使用。
 
 ### 架构
-- **构建环境**：`rust:1.83-alpine`（musl 工具链，静态链接）
+- **构建环境**：`rust:1.95-alpine`（musl 工具链，静态链接）
 - **运行环境**：`scratch` 空镜像，仅含一个静态二进制
 - **内存占用**：常驻 ~3-5 MB
 - **前端**：HTML+CSS+JS 单文件，编译期 `include_str!` 内嵌进二进制，无运行时依赖
