@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico">
+<title>主页</title>
+<style>
+:root{
+  --bg:#0f1115; --bg-elev:#1a1d24; --fg:#e7eaf0; --muted:#8b93a4;
+  --accent:#5b9dff; --accent-soft:rgba(91,157,255,.14);
+  --border:rgba(255,255,255,.08); --radius:22px; --radius-tile:18px;
+  --gap:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg); color:var(--fg);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+@media (prefers-color-scheme:light){:root{
+  --bg:#f4f5f7; --bg-elev:#ffffff; --fg:#1a1d24; --muted:#6b7280;
+  --accent:#2563eb; --accent-soft:rgba(37,99,235,.10);
+  --border:rgba(0,0,0,.08);
+}}
+
+/* 顶栏 */
+.topbar{
+  position:fixed;top:0;left:0;right:0;z-index:30;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:max(10px,env(safe-area-inset-top,0px)) 16px 10px;
+  background:linear-gradient(var(--bg) 60%,transparent);
+}
+.topbar .title{font-size:17px;font-weight:600;letter-spacing:.3px}
+.topbar .actions{display:flex;gap:6px}
+.icon-btn{
+  width:38px;height:38px;border:none;border-radius:50%;
+  background:transparent;color:var(--fg);cursor:pointer;
+  display:grid;place-items:center;opacity:.7;
+}
+.icon-btn:hover{opacity:1;background:var(--bg-elev)}
+.icon-btn svg{width:20px;height:20px}
+/* 完成按钮：编辑态显示并替换编辑按钮 */
+.btn-done{display:none;border:none;background:var(--accent);color:#fff;font-size:14px;font-weight:600;padding:0 16px;border-radius:19px;height:38px;cursor:pointer}
+body.edit .btn-done{display:inline-flex;align-items:center}
+body.edit #btnEdit{display:none}
+
+/* 页面切换容器：scroll-snap */
+.pages{
+  height:100dvh;width:100vw;display:flex;overflow-x:auto;overflow-y:hidden;
+  scroll-snap-type:x mandatory;scroll-behavior:smooth;
+  scrollbar-width:none;
+}
+.pages::-webkit-scrollbar{display:none}
+.page{
+  flex:0 0 100%;width:100vw;height:100dvh;
+  scroll-snap-align:start;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  padding:max(60px,env(safe-area-inset-top,0px) + 54px) max(32px,calc((100vw - 720px)/2)) max(96px,env(safe-area-inset-bottom,0px) + 56px);
+}
+.page::-webkit-scrollbar{width:0}
+
+.page-head{display:flex;align-items:baseline;justify-content:space-between;margin:6px 4px 18px;flex-shrink:0;position:relative;z-index:2}
+.page-head h2{margin:0;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px}
+.page-head .count{font-size:12px;color:var(--muted)}
+
+/* 图标网格 */
+/* 移动端：盒子布局——标题在顶，应用盒子（高度可调、靠顶、盒内滚动）沉到中下部 */
+.grid{display:grid;grid-template-columns:repeat(var(--cols,4),minmax(0,1fr));gap:6px;margin-top:auto;min-height:0;height:var(--box-h,52vh);max-height:var(--box-h,52vh);align-content:start;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 2px 4px}
+.tile{
+  display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:10px 4px;border-radius:var(--radius-tile);cursor:pointer;
+  text-decoration:none;color:var(--fg);position:relative;
+  transition:background .15s,transform .08s;
+}
+.tile:hover{background:var(--bg-elev)}
+.tile:active{transform:scale(.95)}
+.tile .ico{
+  width:100%;aspect-ratio:1;border-radius:18px;display:grid;place-items:center;
+  overflow:hidden;background:var(--bg-elev);
+  box-shadow:0 1px 3px rgba(0,0,0,.25);
+}
+.tile .ico img{width:100%;height:100%;object-fit:cover}
+.tile .ico .letter{
+  width:100%;height:100%;display:grid;place-items:center;
+  font-size:26px;font-weight:700;color:#fff;
+}
+.tile .label{
+  font-size:12.5px;text-align:center;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);
+}
+/* 编辑态：长按选中，出现删除角标 */
+body.edit .tile{cursor:default}
+body.edit .tile:active{transform:none}
+body.edit .tile:hover{background:var(--bg-elev)}
+.tile .del{
+  position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:50%;
+  background:#ef4444;color:#fff;border:none;cursor:pointer;display:none;
+  font-size:15px;line-height:1;align-items:center;justify-content:center;
+}
+body.edit .tile .del{display:flex}
+body.edit .tile,body.edit .tile *{-webkit-user-drag:none;user-select:none;-webkit-user-select:none}
+body.edit .tile{touch-action:none;cursor:grab}
+body.edit .tile.dragging{opacity:.3}
+body.edit .tile.drag-over{outline:2px solid var(--accent);outline-offset:2px}
+.drag-ghost{position:fixed;z-index:60;pointer-events:none;opacity:.92;transform:scale(1.06);box-shadow:0 10px 26px rgba(0,0,0,.45);border-radius:var(--radius-tile)}
+
+/* PC（宽屏）：恢复自适应布局，整页滚动；盒子宽度由 .page padding 限制（居中 max~720px）。
+   此块必须在移动端 .page/.grid/.tile .ico 规则之后，否则同特异性下后者会覆盖（曾导致 PC 图标变成移动端的 width:100% 而被截断）。 */
+@media (min-width:768px){
+  .page{overflow-y:auto;padding:64px max(16px,calc((100vw - 720px)/2)) 120px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:var(--gap);margin-top:0;min-height:0;height:auto;max-height:none;overflow:visible;align-content:stretch}
+  .tile .ico{width:58px;height:58px;aspect-ratio:auto}
+}
+
+/* 空状态 */
+.empty{
+  margin-top:25vh;text-align:center;color:var(--muted);
+  display:flex;flex-direction:column;align-items:center;gap:14px;
+}
+.empty .big{font-size:42px;opacity:.4}
+
+/* 圆点指示器 */
+.dots{position:fixed;bottom:78px;left:0;right:0;display:flex;justify-content:center;gap:8px;z-index:25;pointer-events:none}
+.dots .dot{width:7px;height:7px;border-radius:50%;background:var(--muted);opacity:.3;transition:.2s;cursor:pointer;pointer-events:auto}
+.dots .dot.on{opacity:1;background:var(--accent);width:20px;border-radius:4px}
+
+/* PC 换页箭头：仅鼠标设备显示，低存在感，hover 增强 */
+.nav-arrow{position:fixed;top:50%;transform:translateY(-50%);z-index:24;width:38px;height:60px;border:none;background:transparent;color:var(--fg);cursor:pointer;display:none;place-items:center;opacity:.22;transition:opacity .2s;-webkit-tap-highlight-color:transparent}
+.nav-arrow:hover{opacity:.85}
+.nav-arrow svg{width:26px;height:26px}
+.nav-prev{left:4px}
+.nav-next{right:4px}
+@media (hover:hover) and (pointer:fine){.nav-arrow{display:grid}}
+
+/* 底部 FAB */
+.fab{
+  position:fixed;right:20px;bottom:max(20px,env(safe-area-inset-bottom,0px));z-index:26;
+  width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;
+  background:var(--accent);color:#fff;display:grid;place-items:center;
+  box-shadow:0 6px 20px rgba(0,0,0,.35);transition:transform .12s;
+}
+.fab:active{transform:scale(.9)}
+.fab svg{width:26px;height:26px}
+.fab.hidden{display:none}
+
+/* 模态框 */
+.modal-bg{
+  position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);
+  display:none;align-items:flex-end;justify-content:center;
+  animation:fade .15s;
+}
+.modal-bg.open{display:flex}
+@keyframes fade{from{opacity:0}}
+.modal{
+  width:100%;max-width:480px;background:var(--bg-elev);
+  border-radius:24px 24px 0 0;padding:20px 20px max(24px,env(safe-area-inset-bottom,0px));
+  animation:slideup .22s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes slideup{from{transform:translateY(40px);opacity:.4}}
+.modal h3{margin:4px 4px 16px;font-size:17px}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+.field input,.field select{
+  width:100%;padding:12px 14px;border-radius:13px;border:1px solid var(--border);
+  background:var(--bg);color:var(--fg);font-size:15px;outline:none;
+}
+.field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.seg{display:flex;background:var(--bg);border-radius:13px;padding:3px;gap:3px}
+.seg button{
+  flex:1;padding:10px;border:none;border-radius:10px;background:transparent;
+  color:var(--muted);font-size:14px;cursor:pointer;font-weight:600;
+}
+.seg button.on{background:var(--accent);color:#fff}
+.preview-row{display:flex;align-items:center;gap:12px;margin:6px 0 16px}
+.preview-row .ico{width:50px;height:50px;border-radius:14px;overflow:hidden;background:var(--bg);display:grid;place-items:center;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.preview-row .ico img{width:100%;height:100%}
+.preview-row .url{font-size:12px;color:var(--muted);word-break:break-all;flex:1}
+.btn-row{display:flex;gap:10px;margin-top:8px}
+.btn{
+  flex:1;padding:13px;border:none;border-radius:13px;font-size:15px;font-weight:600;cursor:pointer;
+}
+.btn.primary{background:var(--accent);color:#fff}
+.btn.ghost{background:var(--bg);color:var(--fg);border:1px solid var(--border)}
+.btn.danger{background:transparent;color:#ef4444;border:1px solid rgba(239,68,68,.4)}
+.btn-row.col{flex-direction:column}
+.hint{font-size:12px;color:var(--muted);margin:8px 4px 0;line-height:1.5}
+.menu-row{display:flex;justify-content:space-between;align-items:center;padding:15px 4px;border-bottom:1px solid var(--border)}
+.menu-row:last-child{border:none}
+.menu-row .k{font-size:15px}
+.menu-row .v{font-size:13px;color:var(--muted)}
+.menu-row.link{cursor:pointer}
+.menu-row.link:active{opacity:.6}
+
+/* 资源库选图网格 */
+.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:10px;max-height:46vh;overflow-y:auto;padding:4px}
+.asset-grid .asset{aspect-ratio:1;width:100%;border-radius:12px;overflow:hidden;background:var(--bg);border:2px solid transparent;cursor:pointer;display:grid;place-items:center}
+.asset-grid .asset img{width:100%;height:100%;object-fit:cover}
+.asset-grid .asset:hover{border-color:var(--accent)}
+.asset-grid .asset.empty{color:var(--muted);font-size:12px;text-align:center;padding:8px}
+/* 添加磁贴：编辑态隐藏（由 body.edit 控制） */
+body.edit .add-tile{display:none}
+/* IP 模式：协议下拉 + 地址并排 */
+.url-row{display:flex;gap:8px}
+.url-row select{flex:0 0 auto;width:auto;padding:0 10px;border-radius:13px;border:1px solid var(--border);background:var(--bg);color:var(--fg);font-size:15px}
+.url-row input{flex:1}
+/* 图标输入行：输入框 + 资源库按钮 */
+.icon-row{display:flex;gap:8px}
+.icon-row input{flex:1}
+.icon-row button{flex:0 0 auto;padding:0 14px;border-radius:13px;border:1px solid var(--border);background:var(--bg);color:var(--fg);font-size:13px;cursor:pointer;white-space:nowrap}
+.icon-row button:hover{border-color:var(--accent);color:var(--accent)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="title" id="pageTitle">主页</div>
+  <div class="actions">
+    <button class="icon-btn" id="btnEdit" title="编辑">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>
+    </button>
+    <button class="btn-done" id="btnDone" title="完成编辑">完成</button>
+    <button class="icon-btn" id="btnMenu" title="设置">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="pages" id="pages"></div>
+
+<div class="dots" id="dots"></div>
+
+<button class="nav-arrow nav-prev" id="navPrev" aria-label="上一页" title="上一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4 L7 12 L15 20"/></svg></button>
+<button class="nav-arrow nav-next" id="navNext" aria-label="下一页" title="下一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 L17 12 L9 20"/></svg></button>
+
+<!-- 添加/编辑站点模态 -->
+<div class="modal-bg" id="modalAdd">
+  <div class="modal">
+    <h3 id="modalAddTitle">添加站点</h3>
+    <div class="field" id="typeSegWrap">
+      <div class="seg" id="typeSeg">
+        <button data-t="domain" class="on">域名模式</button>
+        <button data-t="lan">本地 IP 模式</button>
+      </div>
+    </div>
+    <div id="domainFields">
+      <div class="field">
+        <label>子域名 或 完整地址</label>
+        <input id="fSub" placeholder="id，或 https://id.nas.lan:8443" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="hint">输子域名（如 <b>id</b>）自动拼成 <span id="urlPreview" style="color:var(--accent)">https://id.nas.lan:8443</span>；粘完整 https:// 地址则原样使用。</div>
+    </div>
+    <div id="lanFields" style="display:none">
+      <div class="field">
+        <label>IP / 域名 : 端口</label>
+        <div class="url-row">
+          <select id="fScheme">
+            <option value="http">http://</option>
+            <option value="https">https://</option>
+          </select>
+          <input id="fUrl" placeholder="192.168.1.100:3000" autocomplete="off" autocapitalize="off" spellcheck="false">
+        </div>
+      </div>
+    </div>
+    <div class="field">
+      <label>显示名称</label>
+      <input id="fName" placeholder="Authelia" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>图标（可选，留空自动获取）</label>
+      <div class="icon-row">
+        <input id="fIcon" placeholder="🔒 或 https://.../icon.png" autocomplete="off">
+        <button type="button" id="btnAsset">资源库</button>
+      </div>
+      <div class="hint">留空 = 自动从站点取 favicon；填 emoji / 图片 URL，或点“资源库”从本地图片选。</div>
+    </div>
+    <div class="preview-row" id="iconPreview">
+      <div class="ico"><div class="letter" id="pvLetter" style="background:#5b9dff">A</div></div>
+      <div class="url" id="pvUrl">—</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn ghost" id="addCancel">取消</button>
+      <button class="btn primary" id="addSave">保存</button>
+    </div>
+    <div class="btn-row col" id="editExtras" style="display:none;margin-top:10px">
+      <button class="btn danger" id="addDelete">删除此站点</button>
+    </div>
+  </div>
+</div>
+
+<!-- 设置/菜单模态 -->
+<div class="modal-bg" id="modalMenu">
+  <div class="modal">
+    <h3>设置</h3>
+    <div class="menu-row"><div class="k">默认协议</div>
+      <select id="setScheme" style="max-width:140px;padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--fg)">
+        <option value="https">https://</option><option value="http">http://</option>
+      </select>
+    </div>
+    <div class="menu-row"><div class="k">基础域名</div>
+      <input id="setDomain" value="nas.lan" style="max-width:160px;text-align:right">
+    </div>
+    <div class="menu-row"><div class="k">端口</div>
+      <input id="setPort" value="8443" style="max-width:80px;text-align:right">
+    </div>
+    <div class="menu-row"><div class="k">每行图标数</div>
+      <select id="setCols" style="max-width:100px;padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--fg)">
+        <option value="4">4 个</option>
+        <option value="5">5 个</option>
+        <option value="6">6 个</option>
+      </select>
+    </div>
+    <div class="menu-row"><div class="k">盒子高度</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <input type="range" id="setBoxH" min="35" max="78" value="52" style="width:130px;accent-color:var(--accent)">
+        <span id="boxHVal" style="font-size:13px;color:var(--muted);min-width:36px;text-align:right">52</span>
+      </div>
+    </div>
+    <div class="menu-row link" id="mnuExport"><div class="k">导出配置</div><div class="v">下载 JSON ›</div></div>
+    <div class="menu-row link" id="mnuImport"><div class="k">导入配置</div><div class="v">选择文件 ›</div></div>
+    <input type="file" id="importFile" accept="application/json,.json" style="display:none">
+    <div class="menu-row link" id="mnuRefresh"><div class="k">重新加载图标</div><div class="v">刷新缓存 ›</div></div>
+    <div class="btn-row"><button class="btn ghost" id="menuClose">关闭</button></div>
+  </div>
+</div>
+
+<!-- 资源库选图模态 -->
+<div class="modal-bg" id="modalAssets">
+  <div class="modal">
+    <h3>从资源库选图</h3>
+    <div class="hint" style="margin:0 0 12px">把图片放到 <b>data/assets/</b> 目录后即可在此选择。</div>
+    <div class="asset-grid" id="assetGrid"></div>
+    <div class="btn-row" style="margin-top:14px"><button class="btn ghost" id="assetClose">关闭</button></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const LS_KEY="homepage_v1";
+const BOX_H_KEY="homepage_boxh"; // 盒子高度偏好：仅存本地（设备相关，不同步后端）
+const COLS_KEY="homepage_cols";  // 每行图标数：仅存本地（设备相关，不同步后端）
+const API="/api";
+
+// ---- 状态 ----
+let state = { settings:{scheme:"https",baseDomain:"nas.lan",basePort:"8443"}, pages:[
+  {id:"domain", name:"域名", sites:[]},
+  {id:"lan", name:"局域网", sites:[]}
+]};
+let curPage=0, editingId=null, addType="domain";
+
+// ---- 工具 ----
+const $=s=>document.querySelector(s);
+const uid=()=>"s"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+// HTML 与双引号属性转义；额外转义 ' 以防未来出现单引号属性 sink。
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// 方案白名单：渲染时强制校验，杜绝 javascript:/data:text-html 等危险方案。
+// 用于 <a href> 与 <img src>。非白名单一律回退到 '#'（href）或自动图标（src）。
+const isSafeUrl=u=>/^https:\/\/|^http:\/\/[^\s]*$/i.test(String(u||""));
+// isSafeImgSrc 额外放行同源后端代理 /api/icon（自动取图标走它；相对路径非危险 scheme，
+// <img> 不执行脚本，且后端图标响应已带 CSP default-src 'none' 防 SVG XSS）。
+const isSafeImgSrc=u=>/^(https:\/\/|http:\/\/[^\s]*$|data:image\/|\/api\/icon\b|\/assets\/)/i.test(String(u||""));
+
+function colorFor(str){
+  // 由名称生成稳定柔和的色相
+  let h=0; for(const ch of String(str)) h=(h*31+ch.charCodeAt(0))%360;
+  return `hsl(${h} 55% 45%)`;
+}
+// 盒子高度（移动端应用区高度，vh）：仅存 localStorage，按设备偏好，不进 state、不同步后端。
+function applyBoxH(v){
+  const n=Math.max(35,Math.min(78,Math.round(Number(v)||52)));
+  document.documentElement.style.setProperty('--box-h',n+'vh');
+  return n;
+}
+function loadBoxH(){
+  let v=52;
+  try{ const s=localStorage.getItem(BOX_H_KEY); if(s) v=Number(s)||52; }catch(e){}
+  return applyBoxH(v);
+}
+// 每行图标数（4/5/6）：仅存 localStorage，按设备偏好，不进 state、不同步后端。
+function applyCols(v){
+  const n=[4,5,6].includes(Number(v))?Number(v):4;
+  document.documentElement.style.setProperty('--cols',n);
+  return n;
+}
+function loadCols(){
+  let v=4;
+  try{ const s=localStorage.getItem(COLS_KEY); if(s) v=Number(s); }catch(e){}
+  return applyCols(v);
+}
+
+// 域名模式：拼出完整 URL
+function urlOfDomain(site){
+  if(site.url) return site.url; // 域名模式填了完整 URL 时原样用
+  const {scheme,baseDomain,basePort}=state.settings;
+  return `${scheme}://${site.subdomain}.${baseDomain}:${basePort}`;
+}
+function urlOf(site){
+  return site.mode==="domain"?urlOfDomain(site):site.url;
+}
+
+// 图标 URL：
+// - 优先用用户手动填的 icon（URL / data: URI / emoji），留空才自动取。
+// - 自动取统一走后端代理 /api/icon?url=：后端解析目标首页 <link> 取高清图标
+//   （域名模式带 authelia_session 过 Authelia），并规避 LAN 模式的混合内容拦截。
+function iconSrc(site){
+  if(site.icon) return site.icon;  // 手动覆盖
+  return `${API}/icon?url=${encodeURIComponent(urlOf(site))}`;
+}
+
+// emoji 判定（手动覆盖时区分图片 URL 与 emoji）
+function isEmoji(s){ return s && !/^https?:|^data:|^\/assets\//i.test(s); }
+
+// ---- 持久化：本地缓存 + 后端同步 ----
+function loadLocal(){
+  try{ const r=localStorage.getItem(LS_KEY); if(r) state=JSON.parse(r);}catch(e){}
+  ensureShape(); sanitizeState();
+}
+function ensureShape(){
+  if(!state.settings) state.settings={scheme:"https",baseDomain:"nas.lan",basePort:"8443"};
+  if(!state.pages||state.pages.length<2){
+    state.pages=[
+      {id:"domain",name:"域名",sites:[]},
+      {id:"lan",name:"局域网",sites:[]}
+    ];
+  }
+}
+// 入口净化：所有数据进入 state（localStorage / 导入 / 后端拉取 / 保存）统一过一遍，
+// 杜绝恶意 JSON（含 javascript: 链接、img src 属性逃逸等）造成存储型 XSS。
+function sanitizeState(){
+  // settings
+  if(state.settings && typeof state.settings==="object"){
+    const se=state.settings;
+    se.scheme = (se.scheme==="http")?"http":"https";
+    se.baseDomain = String(se.baseDomain||"nas.lan").replace(/^https?:\/\//,"").replace(/[^a-z0-9.-]/gi,"").toLowerCase().slice(0,120) || "nas.lan";
+    se.basePort  = String(se.basePort||"8443").replace(/[^0-9]/g,"").slice(0,5) || "8443";
+    delete se.cols; // cols 已改为仅本地存储，清理后端/旧数据里可能残留的字段
+  } else {
+    state.settings={scheme:"https",baseDomain:"nas.lan",basePort:"8443"};
+  }
+  // pages
+  if(!Array.isArray(state.pages)) state.pages=[];
+  state.pages=state.pages.map(sanitizePage).filter(Boolean);
+  if(state.pages.length===0){
+    state.pages=[{id:"domain",name:"域名",sites:[]},{id:"lan",name:"局域网",sites:[]}];
+  }else{
+    // 一次性迁移：旧默认名"域名服务"→"域名"
+    state.pages.forEach(p=>{ if(p.id==="domain" && p.name==="域名服务") p.name="域名"; });
+  }
+}
+function sanitizePage(pg){
+  if(!pg || typeof pg!=="object") return null;
+  return {
+    id: String(pg.id||"p"+Math.random().toString(36).slice(2,6)).replace(/[^a-z0-9_-]/gi,"").slice(0,40) || "p",
+    name: String(pg.name||"").slice(0,40),
+    sites: Array.isArray(pg.sites)?pg.sites.map(sanitizeSite).filter(Boolean):[]
+  };
+}
+function sanitizeSite(s){
+  if(!s || typeof s!=="object") return null;
+  const mode = (s.mode==="lan")?"lan":"domain";
+  const out={id:String(s.id||uid()).replace(/[^a-z0-9_-]/gi,"").slice(0,40)||uid(), mode};
+  if(mode==="lan"){
+    // LAN：必须是合法 http(s) URL
+    let url=String(s.url||"").trim();
+    try{ if(/^https?:\/\//i.test(url)){ const p=new URL(url); out.url=p.protocol+"//"+p.host; } else return null; }
+    catch(e){ return null; }
+  }else{
+    // 域名模式：优先看是否填了完整 URL（url 字段，或 subdomain 里带 scheme）
+    const raw=String(s.url||s.subdomain||"").trim();
+    if(/^https?:\/\//i.test(raw)){
+      try{ const p=new URL(raw); out.url=p.protocol+"//"+p.host; }catch(e){ return null; }
+    }else{
+      const sub=raw.toLowerCase().replace(/[^a-z0-9.-]/g,"").slice(0,63);
+      if(!sub) return null;
+      out.subdomain=sub;
+    }
+  }
+  out.name=String(s.name||"").slice(0,40);
+  // 图标覆盖：emoji / https / data:image / 同源资源库 /assets/；其余丢弃
+  const ic=String(s.icon||"").trim().slice(0,500);
+  if(ic){
+    if(isEmoji(ic)) out.icon=ic;
+    else if(/^data:image\//i.test(ic)) out.icon=ic;
+    else if(/^https:\/\//i.test(ic)){ try{ out.icon=new URL(ic).href; }catch(e){ /* drop */ } }
+    else if(/^\/assets\//i.test(ic)) out.icon=ic;
+    // http:// 与其他 scheme 不收（避免混合内容/泄露）
+  }
+  return out;
+}
+function saveLocal(){ try{ localStorage.setItem(LS_KEY,JSON.stringify(state)); }catch(e){} }
+async function syncToServer(){
+  try{ await fetch(`${API}/sites`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}); }
+  catch(e){ /* 离线降级：本地仍可用 */ }
+}
+
+// ---- 渲染 ----
+function render(){
+  const wrap=$("#pages"); wrap.innerHTML="";
+  state.pages.forEach((pg,pi)=>{
+    const div=document.createElement("div");
+    div.className="page"; div.dataset.idx=pi;
+    const count=pg.sites.length;
+    let inner=`<div class="page-head"><h2>${esc(pg.name)}</h2><span class="count">${count} 项</span></div>`;
+    inner+=`<div class="grid">`;
+    pg.sites.forEach(s=>{
+        const u=urlOf(s); const label=esc(s.name||s.subdomain||s.url||"");
+        // 渲染期强制方案白名单：非 http(s) 的 href 回退 '#'，杜绝 javascript: 等执行。
+        const safeHref = isSafeUrl(u) ? esc(u) : "#";
+        // 手动覆盖为 emoji：直接大字渲染（不放背景色，emoji 自带颜色）。
+        // 手动覆盖为 URL/data: 或留空：走 <img> + 首字母色块兜底。
+        let ico;
+        if(s.icon && isEmoji(s.icon)){
+          ico=`<div class="letter" style="font-size:30px;background:transparent">${esc(s.icon)}</div>`;
+        }else{
+          // img src 渲染期校验：只允许 http(s) 或 data:image/，且必须转义，杜绝属性逃逸。
+          const srcRaw=iconSrc(s);
+          const safeSrc = isSafeImgSrc(srcRaw) ? esc(srcRaw) : "";
+          ico=`<img loading="lazy" draggable="false" src="${safeSrc}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">`+
+              `<div class="letter" style="display:none;background:${colorFor(label)}">${esc((label||'?').trim().charAt(0).toUpperCase())}</div>`;
+        }
+        inner+=`
+          <a class="tile" draggable="false" href="${safeHref}" target="_blank" rel="noopener noreferrer" data-id="${esc(s.id)}">
+            <div class="ico">${ico}</div>
+            <button class="del" data-del="${esc(s.id)}">×</button>
+            <span class="label">${label}</span>
+          </a>`;
+      });
+      // 网格末尾的 + 磁贴（与站点卡片同款；编辑态由 CSS body.edit 隐藏）
+      inner+=`
+        <a class="tile add-tile" data-add="${pi}" aria-label="添加站点">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" style="width:55%;height:55%;color:var(--accent)"><path d="M12 5v14M5 12h14"/></svg></div>
+        </a>`;
+      inner+=`</div>`;
+    div.innerHTML=inner;
+    wrap.appendChild(div);
+  });
+  // 圆点
+  const dots=$("#dots"); dots.innerHTML="";
+  state.pages.forEach((_,i)=>{
+    const d=document.createElement("div"); d.className="dot"+(i===curPage?" on":""); d.title=`第${i+1}页`; d.addEventListener("click",()=>scrollToPage(i)); dots.appendChild(d);
+  });
+  bindTiles();
+  bindDragSort();
+}
+
+function bindTiles(){
+  // 删除角标
+  document.querySelectorAll("[data-del]").forEach(b=>{
+    b.addEventListener("click",e=>{
+      e.preventDefault();e.stopPropagation();
+      const id=b.dataset.del;
+      state.pages[curPage].sites=state.pages[curPage].sites.filter(s=>s.id!==id);
+      saveLocal(); syncToServer(); render();
+    });
+  });
+  // 网格末尾 + 磁贴：定位到该页并打开添加框
+  document.querySelectorAll("[data-add]").forEach(b=>{
+    b.addEventListener("click",e=>{
+      e.preventDefault();
+      scrollToPage(Number(b.dataset.add));
+      openAdd();
+    });
+  });
+}
+
+// ---- 编辑模式：长按拖拽排序（Pointer Events，桌面/移动通用）----
+let drag=null;
+function onTileDown(e){
+  if(!document.body.classList.contains("edit")) return;
+  if(e.pointerType==="mouse" && e.button!==0) return;
+  // 点删除角标 / +磁贴不触发拖拽
+  if(e.target.closest("[data-del]")||e.target.closest("[data-add]")) return;
+  const tile=e.currentTarget;
+  const id=tile.dataset.id;
+  if(!id) return;
+  e.preventDefault(); // 阻止原生拖拽/文本选择，避免与 pointer 拖拽冲突
+  drag={id,tile,startX:e.clientX,startY:e.clientY,moved:false,ghost:null,suppressClick:false};
+  window.addEventListener("pointermove",onTileMove);
+  window.addEventListener("pointerup",onTileUp);
+}
+function onTileMove(e){
+  if(!drag) return;
+  const dx=e.clientX-drag.startX, dy=e.clientY-drag.startY;
+  if(!drag.moved){
+    if(Math.hypot(dx,dy)<8) return; // 小于阈值算点击，不拖拽
+    drag.moved=true;
+    const r=drag.tile.getBoundingClientRect();
+    const g=drag.tile.cloneNode(true);
+    g.classList.add("drag-ghost");
+    g.style.width=r.width+"px";
+    g.style.height=r.height+"px";
+    g.style.left=r.left+"px";
+    g.style.top=r.top+"px";
+    document.body.appendChild(g);
+    drag.ghost=g;
+    drag.offX=drag.startX-r.left;
+    drag.offY=drag.startY-r.top;
+    drag.tile.classList.add("dragging");
+  }
+  e.preventDefault(); // 拖拽中阻止页面滚动
+  drag.ghost.style.left=(e.clientX-drag.offX)+"px";
+  drag.ghost.style.top=(e.clientY-drag.offY)+"px";
+  const el=document.elementFromPoint(e.clientX,e.clientY);
+  const t=el && el.closest ? el.closest(".tile:not(.add-tile)") : null;
+  document.querySelectorAll(".tile.drag-over").forEach(x=>x.classList.remove("drag-over"));
+  if(t && t!==drag.tile){ t.classList.add("drag-over"); drag.targetId=t.dataset.id; }
+  else drag.targetId=null;
+}
+function onTileUp(){
+  window.removeEventListener("pointermove",onTileMove);
+  window.removeEventListener("pointerup",onTileUp);
+  if(!drag) return;
+  const moved=drag.moved, targetId=drag.targetId, id=drag.id;
+  if(drag.ghost) drag.ghost.remove();
+  document.querySelectorAll(".tile.drag-over").forEach(x=>x.classList.remove("drag-over"));
+  if(drag.tile) drag.tile.classList.remove("dragging");
+  if(moved){
+    drag.suppressClick=true;
+    // 拦截拖拽释放后紧随的 click，避免误进编辑框
+    const blocker=(ev)=>{ ev.preventDefault(); ev.stopPropagation(); document.removeEventListener("click",blocker,true); };
+    document.addEventListener("click",blocker,true);
+    if(targetId){
+      const sites=state.pages[curPage].sites;
+      const from=sites.findIndex(s=>s.id===id);
+      const to=sites.findIndex(s=>s.id===targetId);
+      if(from>=0 && to>=0 && from!==to){
+        const [item]=sites.splice(from,1);
+        sites.splice(to,0,item);
+        saveLocal(); syncToServer(); render();
+      }
+    }
+  }
+  drag=null;
+}
+function bindDragSort(){
+  if(!document.body.classList.contains("edit")) return;
+  const pageEl=document.querySelectorAll(".page")[curPage];
+  if(!pageEl) return;
+  pageEl.querySelectorAll(".grid .tile:not(.add-tile)").forEach(t=>{
+    t.addEventListener("pointerdown",onTileDown);
+  });
+}
+
+// ---- 页面切换 ----
+function scrollToPage(i){
+  curPage=(i+state.pages.length)%state.pages.length;
+  $("#pages").scrollTo({left:curPage*window.innerWidth,behavior:"smooth"});
+  updateDots(); updateFAB();
+}
+function updateDots(){
+  document.querySelectorAll("#dots .dot").forEach((d,i)=>d.classList.toggle("on",i===curPage));
+}
+function updateFAB(){ /* FAB 已移除；+磁贴显隐由 CSS body.edit .add-tile 控制 */ }
+
+// ---- 添加/编辑模态 ----
+function openAdd(){
+  editingId=null; addType=state.pages[curPage].id==="lan"?"lan":"domain";
+  $("#modalAddTitle").textContent="添加站点";
+  $("#editExtras").style.display="none";
+  $("#fSub").value=""; $("#fUrl").value=""; $("#fName").value=""; $("#fIcon").value=""; $("#fScheme").value="http";
+  setType(addType); $("#modalAdd").classList.add("open");
+  setTimeout(()=>$("#fSub").focus(),120);
+}
+function setType(t){
+  addType=t;
+  document.querySelectorAll("#typeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
+  $("#domainFields").style.display=t==="domain"?"block":"none";
+  $("#lanFields").style.display=t==="lan"?"block":"none";
+  updatePreview();
+}
+function liveUrl(){
+  if(addType==="domain"){
+    const raw=$("#fSub").value.trim();
+    if(/^https?:\/\//i.test(raw)) return raw; // 完整 URL 原样
+    const sub=raw.toLowerCase().replace(/[^a-z0-9.-]/g,"");
+    return urlOfDomain({subdomain:sub||"sub"});
+  }
+  // lan：协议下拉 + 地址（剥离可能误粘的前缀）
+  const scheme=$("#fScheme").value || "http";
+  const host=$("#fUrl").value.trim().replace(/^https?:\/\//i,"");
+  return host ? `${scheme}://${host}` : "";
+}
+function updatePreview(){
+  const u=liveUrl();
+  $("#urlPreview").textContent=u;
+  $("#pvUrl").textContent=u;
+  // 名称推断：优先输入框；否则域名模式取子域名/host，IP 模式取 host
+  let name=$("#fName").value.trim();
+  if(!name){
+    if(addType==="domain"){
+      const raw=$("#fSub").value.trim();
+      name = /^https?:\/\//i.test(raw) ? (raw.split("/")[2]||raw) : raw;
+    }else{
+      try{ name=new URL(u||"http://x").host.split(":")[0]; }catch(e){ name=""; }
+    }
+  }
+  $("#pvLetter").textContent=(name||"?").charAt(0).toUpperCase();
+  $("#pvLetter").style.background=colorFor(name);
+  $("#pvUrl").dataset.url=u;
+
+  const ico=$("#iconPreview .ico");
+  let img=ico.querySelector("img");
+  // 先恢复默认：letter 显示，img 隐藏
+  $("#pvLetter").style.display="grid";
+
+  const ov=$("#fIcon").value.trim();
+  if(ov && isEmoji(ov)){
+    // 手动 emoji：letter 改显 emoji，不动背景色
+    if(img) img.style.display="none";
+    $("#pvLetter").textContent=ov;
+    $("#pvLetter").style.fontSize="30px";
+    $("#pvLetter").style.background="transparent";
+    return;
+  }
+  // 重置 emoji 带来的样式
+  $("#pvLetter").style.fontSize="";
+  if(ov && /^https?:|^data:|^\/assets\//i.test(ov)){
+    // 手动图片 URL / data / 本地资源库：直接用，不走自动抓取
+    if(!img){ img=document.createElement("img"); ico.prepend(img); }
+    img.src=ov; img.style.display="";
+    img.onerror=()=>{img.style.display="none"};
+    $("#pvLetter").style.display="none";
+    return;
+  }
+  // 自动取：统一走后端代理（解析高清图标 / LAN 规避混合内容）
+  if(u && /^https?:\/\//.test(u)){
+    if(!img){ img=document.createElement("img"); ico.prepend(img); }
+    img.src=`${API}/icon?url=${encodeURIComponent(u)}`;
+    img.style.display="";
+    img.onerror=()=>{img.style.display="none"; $("#pvLetter").style.display="grid";};
+    $("#pvLetter").style.display="none";
+  }else{
+    if(img) img.style.display="none";
+  }
+}
+function saveFromModal(){
+  let site;
+  const icon=$("#fIcon").value.trim();
+  if(addType==="domain"){
+    const raw=$("#fSub").value.trim();
+    if(!raw){ $("#fSub").focus(); return; }
+    if(/^https?:\/\//i.test(raw)){
+      // 完整 URL：存 url 字段（仍归域名页）
+      try{ new URL(raw); }catch(e){ $("#fSub").focus(); return; }
+      const name=$("#fName").value.trim() || raw.split("/")[2] || raw;
+      site={id:editingId||uid(),mode:"domain",url:raw,name};
+    }else{
+      const sub=raw.toLowerCase().replace(/[^a-z0-9.-]/g,"");
+      if(!sub){ $("#fSub").focus(); return; }
+      site={id:editingId||uid(),mode:"domain",subdomain:sub,name:$("#fName").value.trim()||sub};
+    }
+  }else{
+    const scheme=$("#fScheme").value||"http";
+    const host=$("#fUrl").value.trim().replace(/^https?:\/\//i,"");
+    if(!host){ $("#fUrl").focus(); return; }
+    const url=`${scheme}://${host}`;
+    try{ new URL(url); }catch(e){ $("#fUrl").focus(); return; }
+    site={id:editingId||uid(),mode:"lan",url,name:$("#fName").value.trim()||new URL(url).host};
+  }
+  if(icon) site.icon=icon;  // 仅在填写时持久化；留空走自动获取
+  site=sanitizeSite(site);  // 统一净化（图标只收 emoji/https/data:image/资源库，URL 再校验）
+  if(!site){ return; }       // 净化后非法则不保存
+  // 按所选模式归类（不受当前所在页影响）；编辑时支持跨页迁移
+  const targetId = site.mode==="lan" ? "lan" : "domain";
+  const pg = state.pages.find(p=>p.id===targetId);
+  if(editingId){
+    state.pages.forEach(p=>{ p.sites=p.sites.filter(s=>s.id!==editingId); });
+    pg.sites.push(site);
+  }else{
+    pg.sites.push(site);
+  }
+  closeAdd(); saveLocal(); syncToServer(); render();
+}
+function closeAdd(){ $("#modalAdd").classList.remove("open"); }
+
+// ---- 设置 ----
+function openMenu(){
+  $("#setScheme").value=state.settings.scheme;
+  $("#setDomain").value=state.settings.baseDomain;
+  $("#setPort").value=state.settings.basePort;
+  $("#setCols").value=loadCols();
+  const bh=loadBoxH();
+  $("#setBoxH").value=bh;
+  $("#boxHVal").textContent=bh;
+  $("#modalMenu").classList.add("open");
+}
+function applySettings(){
+  state.settings.scheme=$("#setScheme").value;
+  state.settings.baseDomain=$("#setDomain").value.trim().replace(/^https?:\/\//,"");
+  state.settings.basePort=$("#setPort").value.trim();
+  saveLocal(); syncToServer(); render();
+}
+
+// ---- 编辑模式 ----
+function toggleEdit(){
+  document.body.classList.toggle("edit");
+  updateFAB();
+  if(document.body.classList.contains("edit")){
+    bindDragSort(); // 进入编辑：给当前页磁贴绑拖拽
+    // 编辑态下点击 tile 进入编辑
+    document.querySelectorAll(".tile").forEach(t=>{
+      t.addEventListener("click",function stop(e){
+        if(document.body.classList.contains("edit")){
+          if(e.target.closest("[data-del]")) return; // 点删除角标：交给删除逻辑，不进编辑
+          if(drag && drag.suppressClick){ return; }   // 刚拖拽完：忽略本次 click
+          e.preventDefault();
+          const id=t.dataset.id; editingId=id;
+          const s=state.pages[curPage].sites.find(x=>x.id===id);
+          if(s){
+            addType=s.mode||"domain"; setType(addType);
+            $("#modalAddTitle").textContent="编辑站点";
+            $("#editExtras").style.display="flex";
+            if(s.mode==="lan"){
+              try{ const p=new URL(s.url); $("#fScheme").value=p.protocol.replace(":",""); $("#fUrl").value=p.host; }
+              catch(e){ $("#fUrl").value=String(s.url||"").replace(/^https?:\/\//i,""); }
+            } else { $("#fSub").value=s.url||s.subdomain||""; }
+            $("#fName").value=s.name||"";
+            $("#fIcon").value=s.icon||"";
+            $("#modalAdd").classList.add("open");
+            updatePreview();
+          }
+        }
+      },{capture:true});
+    });
+  }
+}
+
+// ---- 导入导出 ----
+function doExport(){
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="homepage-config.json"; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function doImport(file){
+  const r=new FileReader();
+  r.onload=async()=>{
+    try{
+      const obj=JSON.parse(r.result);
+      if(obj.settings) state.settings=obj.settings;
+      if(obj.pages) state.pages=obj.pages;
+      // 入口净化：丢弃恶意/超纲字段，杜绝存储型 XSS。
+      ensureShape(); sanitizeState(); saveLocal(); await syncToServer(); render();
+      $("#modalMenu").classList.remove("open");
+    }catch(e){ alert("导入失败：JSON 格式错误"); }
+  };
+  r.readAsText(file);
+}
+async function refreshIcons(){
+  // 清后端缓存由后端自行管理；这里只让前端重渲并强制重新请求
+  document.querySelectorAll(".tile .ico img").forEach(img=>{
+    const base=img.src.split("&_=")[0]; img.src=base+"&_="+Date.now();
+  });
+  $("#modalMenu").classList.remove("open");
+}
+
+// ---- 资源库选图 ----
+async function openAssets(){
+  const grid=$("#assetGrid");
+  grid.innerHTML=`<div class="asset empty">加载中…</div>`;
+  $("#modalAssets").classList.add("open");
+  let names=[];
+  try{ const r=await fetch(`${API}/assets`); if(r.ok) names=await r.json(); }catch(e){}
+  if(!Array.isArray(names) || !names.length){
+    grid.innerHTML=`<div class="asset empty">资源库为空。<br>把图片放到 data/assets/</div>`;
+    return;
+  }
+  grid.innerHTML="";
+  names.forEach(n=>{
+    const d=document.createElement("div");
+    d.className="asset";
+    d.innerHTML=`<img src="/assets/${encodeURIComponent(n)}" alt="${esc(n)}" loading="lazy">`;
+    d.addEventListener("click",()=>{
+      $("#fIcon").value=`/assets/${n}`;
+      $("#modalAssets").classList.remove("open");
+      updatePreview();
+    });
+    grid.appendChild(d);
+  });
+}
+
+// ---- 启动 ----
+async function boot(){
+  loadLocal();
+  loadBoxH(); // 应用本地盒子高度偏好（render 前设好 CSS 变量）
+  loadCols(); // 应用本地每行图标数偏好
+  // 先用本地缓存秒渲染（离线/首屏快）
+  render();
+  // 再从后端拉取最新，覆盖本地（以服务端为准）
+  try{
+    const r=await fetch(`${API}/sites`);
+    if(r.ok){
+      const sv=await r.json();
+      if(sv && sv.pages){ state=sv; ensureShape(); sanitizeState(); saveLocal(); render(); }
+    }
+  }catch(e){}
+  bindGlobal();
+}
+
+function bindGlobal(){
+  $("#pages").addEventListener("scroll",()=>{
+    const i=Math.round($("#pages").scrollLeft/window.innerWidth);
+    if(i!==curPage){ curPage=i; updateDots(); if(document.body.classList.contains("edit")) bindDragSort(); }
+  },{passive:true});
+  document.querySelectorAll("#typeSeg button").forEach(b=>b.addEventListener("click",()=>setType(b.dataset.t)));
+  ["fSub","fName","fIcon"].forEach(id=>$("#"+id).addEventListener("input",updatePreview));
+  // fUrl：检测粘贴的 https?:// 前缀 → 切换协议下拉并剥离前缀
+  $("#fUrl").addEventListener("input",e=>{
+    const v=e.target.value;
+    const m=v.match(/^https?:\/\//i);
+    if(m){ $("#fScheme").value=/^https/i.test(m[0])?"https":"http"; e.target.value=v.slice(m[0].length); }
+    updatePreview();
+  });
+  $("#fScheme").addEventListener("change",updatePreview);
+  $("#addCancel").addEventListener("click",closeAdd);
+  $("#addSave").addEventListener("click",saveFromModal);
+  $("#addDelete").addEventListener("click",()=>{
+    if(!editingId) return;
+    state.pages.forEach(p=>{ p.sites=p.sites.filter(s=>s.id!==editingId); });
+    closeAdd(); saveLocal(); syncToServer(); render();
+  });
+  $("#btnEdit").addEventListener("click",toggleEdit);
+  $("#btnDone").addEventListener("click",toggleEdit);
+  $("#btnMenu").addEventListener("click",openMenu);
+  $("#menuClose").addEventListener("click",()=>{ applySettings(); $("#modalMenu").classList.remove("open"); });
+  $("#mnuExport").addEventListener("click",doExport);
+  $("#mnuImport").addEventListener("click",()=>$("#importFile").click());
+  $("#importFile").addEventListener("change",e=>{ if(e.target.files[0]) doImport(e.target.files[0]); e.target.value=""; });
+  $("#mnuRefresh").addEventListener("click",refreshIcons);
+  // 每行图标数：立即应用并存本地（不进 state、不同步后端）
+  $("#setCols").addEventListener("change",e=>{ const v=applyCols(e.target.value); try{ localStorage.setItem(COLS_KEY,String(v)); }catch(_){} });
+  // 盒子高度滑块：拖动实时预览，释放时存本地
+  $("#setBoxH").addEventListener("input",e=>{ const v=applyBoxH(e.target.value); $("#boxHVal").textContent=v; });
+  $("#setBoxH").addEventListener("change",e=>{ const v=applyBoxH(e.target.value); try{ localStorage.setItem(BOX_H_KEY,String(v)); }catch(_){} });
+  // 资源库选图
+  $("#btnAsset").addEventListener("click",openAssets);
+  $("#assetClose").addEventListener("click",()=>$("#modalAssets").classList.remove("open"));
+  // 点击遮罩关闭
+  [$("#modalAdd"),$("#modalMenu"),$("#modalAssets")].forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
+  // PC 换页箭头
+  $("#navPrev").addEventListener("click",()=>scrollToPage(curPage-1));
+  $("#navNext").addEventListener("click",()=>scrollToPage(curPage+1));
+  // 键盘左右切换
+  document.addEventListener("keydown",e=>{
+    if(e.key==="ArrowLeft")scrollToPage(curPage-1);
+    if(e.key==="ArrowRight")scrollToPage(curPage+1);
+  });
+}
+boot();
+</script>
+</body>
+</html>

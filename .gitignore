@@ -1,0 +1,19 @@
+.env
+data/*
+!data/.gitkeep
+!data/icons/.gitkeep
+# 可编辑首页模板：随仓库分发，部署时直接改它即可生效（无需重编译）。
+!data/index.html
+
+github_deploy_key
+github_deploy_key.pub
+
+# Rust 构建产物
+target/
+
+# 打包产物
+*.zip
+
+# AI agent 指导文件（开发者本地使用，无需同步）
+AGENTS.md
+docs/

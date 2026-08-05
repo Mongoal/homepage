@@ -1,0 +1,30 @@
+[package]
+name = "homepage"
+version = "0.1.0"
+edition = "2021"
+# 自构建仅由 GitHub Actions 执行（musl 静态 → scratch 运行）。
+# 本仓库不要求本地安装 Rust 工具链。
+
+[dependencies]
+# axum 是本场景最轻量的成熟 HTTP 框架；配合 single-thread 运行时与
+# release 优化，常驻 RSS 目标 ~3-5 MB。
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "macros", "fs", "io-util"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+# 服务端取 favicon：规避浏览器混合内容拦截（HTTPS 页面无法取 HTTP LAN 图标）。
+# rustls 纯 Rust TLS，无需系统 OpenSSL；default-features=false 只保留 async client + rustls。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# 高清图标发现：解析目标首页 HTML 的 <link rel=icon/apple-touch-icon>，按尺寸/类型挑最优。
+# 两者都在 reqwest 依赖树内，显式声明几乎零体积增量。
+regex = "1"
+url = "2"
+# SSRF 防护：解析操作员允许的 LAN CIDR（HOMEPAGE_LAN_CIDRS），仅放行显式允许的内网段。
+ipnet = "2"
+
+[profile.release]
+opt-level = "z"      # 最小体积优先
+lto = true           # 跨 crate 内联，去掉死代码
+codegen-units = 1    # 单单元编译，最大化 LTO
+panic = "abort"      # 不带 unwind 表，省 ~30% 体积
+strip = true         # 去符号

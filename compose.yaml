@@ -1,0 +1,45 @@
+name: homepage
+
+# Homepage 导航主页：独立 Compose，与 caddy-authelia 共享外部网络 caddy-authelia-edge。
+# Caddy 经该网络反代 home.nas.lan:8443 -> homepage:8080（服务名）。
+#
+# 部署：caddy-authelia-edge 网络由 caddy-authelia compose 创建（external），
+# 故需先起 caddy-authelia，再起 homepage；二者日常重启互不影响。
+#
+# 无 permissions-init：二进制启动时会自建 data/ 与 data/icons/（create_dir_all）。
+# 唯一前提是挂载点 ./data 对 UID 1000 可写——部署时在宿主机执行一次：
+#   install -d -o 1000 -g 1000 -m 0750 ./data ./data/icons
+
+services:
+  homepage:
+    image: ghcr.io/${HOMEPAGE_IMAGE_OWNER:-your-github-owner}/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    expose:
+      - "8080"
+    # 复用 caddy-authelia 创建的 edge 网络（external）；Caddy 同在该网络反代进来。
+    networks:
+      - caddy-authelia-edge
+    environment:
+      TZ: Asia/Shanghai
+      HOMEPAGE_DATA_DIR: /data
+      HOMEPAGE_ADDR: "0.0.0.0:8080"
+    env_file:
+      - ./.env
+    volumes:
+      - ./data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+
+networks:
+  # 由 caddy-authelia compose 创建，此处仅引用，不创建。
+  caddy-authelia-edge:
+    name: caddy-authelia-edge
+    external: true
