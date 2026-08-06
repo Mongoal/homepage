@@ -31,8 +31,6 @@ RUN cargo build --release && cp target/release/homepage /homepage
 # ---------- 运行阶段 ----------
 FROM scratch
 
-# 非 root：UID/GID 1000（与 Caddy 容器一致，便于同卷权限）。
-# scratch 无 /etc/passwd；USER 仅需数字 UID:GID。
 COPY --from=builder /homepage /homepage
 
 # /data 由 compose 以 bind mount 提供；VOLUME 仅作文档。
@@ -41,6 +39,7 @@ VOLUME ["/data"]
 EXPOSE 8080
 
 # 根文件系统只读友好：二进制与首页内嵌进镜像，运行时只写挂载的 /data。
-USER 1000:1000
+# 用 root 运行：消除 bind mount 目录的 UID 权限问题（NAS 上 data/ 属主非 1000 会 EACCES）。
+USER 0:0
 
 ENTRYPOINT ["/homepage"]
