@@ -283,27 +283,43 @@ async fn icon_handler(
     headers: HeaderMap,
     Query(q): Query<IconQuery>,
 ) -> Response {
+    eprintln!("[debug][icon] 收到请求 url={}", q.url);
     let origin = match parse_origin(&q.url) {
-        Some(o) => o,
-        None => return StatusCode::BAD_REQUEST.into_response(),
+        Some(o) => { eprintln!("[debug][icon] origin 规范化为 {o}"); o }
+        None => { eprintln!("[debug][icon] parse_origin 失败（非 http(s) 或格式错）"); return StatusCode::BAD_REQUEST.into_response(); }
     };
 
     let key = sha1_hex(origin.as_bytes());
+    eprintln!("[debug][icon] 缓存 key={key} 目录={}", state.icons_dir.display());
     // 先看缓存里有没有任意扩展名的命中。
     if let Some(cached) = load_cached_icon(&state.icons_dir, &key).await {
+        eprintln!("[debug][icon] 缓存命中，直接返回");
         return icon_response(cached.bytes, cached.ctype);
     }
 
     // 抽取入站 authelia_session（仅此一个 cookie）；是否转发交由每次子请求按目标主机判定。
+    let raw_cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("");
     let session = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(extract_authelia_session);
+    eprintln!("[debug][icon] 入站 Cookie 头存在={}，authelia_session 抽取={}", !raw_cookie.is_empty(), session.is_some());
+    if !raw_cookie.is_empty() {
+        eprintln!("[debug][icon] 入站 Cookie 原文(截断80)={}...", &raw_cookie.chars().take(80).collect::<String>());
+    }
 
     // SSRF 防护：拦截私有/回环/链路本地/元数据目标（域名解析后由调用方二次校验见下）。
     if egress_allowed(&origin, &state.lan_cidrs).is_none() {
+        eprintln!("[debug][icon] SSRF 拦截：{} 不在允许出口", origin);
         return StatusCode::NOT_FOUND.into_response();
     }
+
+    // 判断该目标是否会带 cookie（用于日志）
+    let will_cookie = session.as_deref().map(|s| {
+        host_of(&origin).map(|h| host_matches_domain(h, &state.cookie_domain)).unwrap_or(false)
+            && !state.cookie_domain.is_empty()
+    }).unwrap_or(false);
+    eprintln!("[debug][icon] cookie_domain={}，该目标将带cookie={}", state.cookie_domain, will_cookie);
 
     // 拉取：先解析 HTML 找高清，回退 /favicon.ico。cookie 由每个子请求按目标主机决定是否带。
     match fetch_icon(
@@ -318,8 +334,11 @@ async fn icon_handler(
     )
     .await
     {
-        Some(fetched) => icon_response(fetched.bytes, fetched.ctype),
-        None => StatusCode::NOT_FOUND.into_response(),
+        Some(fetched) => {
+            eprintln!("[debug][icon] 抓取成功 ctype={} 字节={}，返回客户端", fetched.ctype, fetched.bytes.len());
+            icon_response(fetched.bytes, fetched.ctype)
+        }
+        None => { eprintln!("[debug][icon] 抓取彻底失败（HTML解析+favicon.ico 都没拿到），返回404"); StatusCode::NOT_FOUND.into_response() }
     }
 }
 
@@ -604,26 +623,31 @@ async fn fetch_icon(
     lan_cidrs: &[IpNet],
 ) -> Option<FetchedIcon> {
     // 路径 1：解析 HTML 找高清图标（best 可能指向别的主机）。
-    if let Some(best) =
-        best_icon_from_html(http, http_lan, origin, session, cookie_domain, lan_cidrs).await
-    {
+    let html_best = best_icon_from_html(http, http_lan, origin, session, cookie_domain, lan_cidrs).await;
+    eprintln!("[debug][icon] 路径1(HTML解析<link>) 结果: {}", html_best.as_deref().unwrap_or("None(未取到/解析失败)"));
+    if let Some(best) = html_best {
         if let Some(f) = try_fetch(http, http_lan, dir, key, &best, session, cookie_domain, lan_cidrs).await {
+            eprintln!("[debug][icon] 路径1 抓取高清图标成功");
             return Some(f);
         }
+        eprintln!("[debug][icon] 路径1 解析出 href={} 但抓取失败，转回退", best);
     }
     // 路径 2：回退 favicon.ico。
+    let fav_url = format!("{origin}/favicon.ico");
+    eprintln!("[debug][icon] 路径2(回退) 尝试 {fav_url}");
     if let Some(f) = try_fetch(
         http,
         http_lan,
         dir,
         key,
-        &format!("{origin}/favicon.ico"),
+        &fav_url,
         session,
         cookie_domain,
         lan_cidrs,
     )
     .await
     {
+        eprintln!("[debug][icon] 路径2 favicon.ico 抓取成功");
         return Some(f);
     }
     // 两条路径都失败：打印诊断，便于排查（目标需认证 / 无 favicon / 超时 / 服务不在线）。
@@ -697,10 +721,18 @@ async fn best_icon_from_html(
     cookie_domain: &str,
     lan_cidrs: &[IpNet],
 ) -> Option<String> {
-    let resp = get_follow(http, http_lan, origin, session, cookie_domain, lan_cidrs).await?;
+    let resp = match get_follow(http, http_lan, origin, session, cookie_domain, lan_cidrs).await {
+        Some(r) => r,
+        None => { eprintln!("[debug][icon]   HTML解析: get_follow 失败 origin={origin}"); return None; }
+    };
+    eprintln!("[debug][icon]   HTML解析: 首页 status={}", resp.status());
     // 限制只读前 256KB：图标 link 通常在 <head>，省内存且防超大页。
-    let body = resp.bytes().await.ok()?;
+    let body = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => { eprintln!("[debug][icon]   HTML解析: 读 body 失败 {e}"); return None; }
+    };
     if body.len() > 262_144 {
+        eprintln!("[debug][icon]   HTML解析: body 超过 256KB({}字节)，放弃", body.len());
         return None;
     }
     let html = String::from_utf8_lossy(&body);
@@ -788,7 +820,11 @@ async fn try_fetch(
     cookie_domain: &str,
     lan_cidrs: &[IpNet],
 ) -> Option<FetchedIcon> {
-    let resp = get_follow(http, http_lan, url, session, cookie_domain, lan_cidrs).await?;
+    let resp = match get_follow(http, http_lan, url, session, cookie_domain, lan_cidrs).await {
+        Some(r) => r,
+        None => { eprintln!("[debug][icon]   try_fetch: get_follow 失败（网络/超时/SSRF/重定向耗尽）url={url}"); return None; }
+    };
+    let status = resp.status();
     // 先取出 header 元数据，再消费 body，避免借用冲突。
     let ctype_raw = resp
         .headers()
@@ -796,20 +832,32 @@ async fn try_fetch(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_owned();
-    let bytes = resp.bytes().await.ok()?;
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => { eprintln!("[debug][icon]   try_fetch: 读 body 失败 url={url} err={e}"); return None; }
+    };
+    eprintln!("[debug][icon]   try_fetch: status={status} ctype={ctype_raw} 字节={}", bytes.len());
 
     let (ext, ctype) = ctype_kind(&ctype_raw).unwrap_or(guess_from_magic(&bytes));
     if !looks_like_image(&bytes, Some(ctype)) {
+        eprintln!("[debug][icon]   try_fetch: looks_like_image=false（疑似HTML登录页/非图片），丢弃 url={url}");
         return None;
     }
 
-    // 落盘缓存（best-effort；失败不影响本次返回）。
+    // 落盘缓存（best-effort；失败不影响本次返回，但 debug 下打印真实原因）。
     let p = dir.join(format!("{key}.{ext}"));
-    if let Ok(mut f) = fs::File::create(&p).await {
-        let _ = f.write_all(&bytes).await;
-        let _ = f.flush().await;
-        let std_file = f.into_std().await;
-        let _ = std_file.sync_all();
+    match fs::File::create(&p).await {
+        Ok(mut f) => {
+            if let Err(e) = f.write_all(&bytes).await { eprintln!("[debug][icon]   落盘 write_all 失败: {e}"); }
+            if let Err(e) = f.flush().await { eprintln!("[debug][icon]   落盘 flush 失败: {e}"); }
+            let std_file = f.into_std().await;
+            if let Err(e) = std_file.sync_all() { eprintln!("[debug][icon]   落盘 sync_all 失败: {e}"); }
+            eprintln!("[debug][icon]   落盘成功: {}", p.display());
+        }
+        Err(e) => {
+            // 这里就是"为什么 icons/ 空"的答案——EACCES/ENOENT/EROFS 等
+            eprintln!("[debug][icon]   ⚠️ 落盘失败（icons/ 空的根因）: create {} 失败: {e}", p.display());
+        }
     }
 
     Some(FetchedIcon { bytes: bytes.to_vec(), ctype })

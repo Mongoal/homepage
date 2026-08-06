@@ -1,0 +1,31 @@
+# Debug 构建：rust:alpine 编译 → alpine 运行时（带 sh/wget/curl，可 docker exec 进去摸）。
+# 与正式 Dockerfile 的唯一区别：运行阶段用 alpine 而非 scratch，以便排查时进容器手动调试。
+# 生产仍用 Dockerfile（scratch，最小）。CI 在 debug 分支用本文件构建 :debug 镜像。
+
+# ---------- 构建阶段（与正式版一致）----------
+FROM docker.io/library/rust:1.95-alpine AS builder
+RUN apk add --no-cache musl-dev
+WORKDIR /build
+COPY Cargo.toml ./
+RUN mkdir -p src && echo 'fn main() { println!("dummy"); }' > src/main.rs && \
+    cargo build --release && \
+	    rm -f target/release/homepage && \
+	    find target/release -depth -name 'homepage-*' -exec rm -rf {} +
+COPY src ./src
+COPY frontend-dist ./frontend-dist
+RUN cargo build --release && cp target/release/homepage /homepage
+
+# ---------- 运行阶段：alpine（带调试工具）----------
+FROM docker.io/library/alpine:3.20
+
+# 装调试工具：sh(alpine 自带 busybox)、wget/curl 测接口、ca-certificates 校验公网 TLS。
+RUN apk add --no-cache wget curl ca-certificates
+
+COPY --from=builder /homepage /homepage
+
+VOLUME ["/data"]
+EXPOSE 8080
+
+# debug 阶段用 root 运行（消除 UID 权限变量，便于排查写入问题）。
+# ENTRYPOINT 固定二进制；排查时可用 --entrypoint sh 进 shell。
+ENTRYPOINT ["/homepage"]
