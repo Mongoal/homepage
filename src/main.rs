@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/export", get(export_handler))
         .route("/api/import", post(import_handler))
         .route("/api/icon", get(icon_handler))
-        .route("/api/assets", get(list_assets_handler))
+        .route("/api/assets", get(list_assets_handler).post(download_asset_handler))
         .route("/assets/:name", get(asset_handler))
         .route("/api/health", get(health_handler))
         .with_state(state);
@@ -180,6 +180,65 @@ async fn health_handler() -> impl IntoResponse {
 /// 站点 favicon（SVG）：复用图标响应的安全头（防 SVG XSS）。
 async fn favicon_handler(State(state): State<AppState>) -> Response {
     icon_response(state.favicon.to_vec(), "image/svg+xml")
+}
+
+/// 转存外链图片到资源库（data/assets/）：用户填一个图片 URL，后端下载存为
+/// /assets/<sha1>.<ext>，返回路径供前端回填 site.icon。免去用户 scp/登录 NAS 拷文件。
+/// 复用 try_fetch（继承 SSRF/TLS/重定向/图片校验全套）；入站 cookie 透传给受保护目标。
+#[derive(serde::Deserialize)]
+struct DownloadAssetBody {
+    url: String,
+}
+async fn download_asset_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DownloadAssetBody>,
+) -> Response {
+    // SSRF 预检（try_fetch 内部的 get_follow 每跳还会再校验一次）。
+    if egress_allowed(&body.url, &state.lan_cidrs).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    // 透传入站 authelia_session：让受 Authelia 保护的应用图标也能转存（与 icon_handler 一致）。
+    let session = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(extract_authelia_session);
+    let key = sha1_hex(body.url.as_bytes());
+    match try_fetch(
+        &state.http,
+        &state.http_lan,
+        &state.assets_dir,
+        &key,
+        &body.url,
+        session.as_deref(),
+        &state.cookie_domain,
+        &state.lan_cidrs,
+    )
+    .await
+    {
+        Some(f) => {
+            let ext = ctype_to_ext(f.ctype);
+            let name = format!("{key}.{ext}");
+            Json(serde_json::json!({
+                "name": name,
+                "path": format!("/assets/{name}"),
+            }))
+            .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// MIME → 扩展名（ctype_kind/guess_from_magic 的反向映射），供转存命名用。
+fn ctype_to_ext(ct: &str) -> &'static str {
+    match ct {
+        "image/svg+xml" => "svg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        _ => "ico", // image/x-icon 及未知 → ico（与 guess_from_magic 兜底一致）
+    }
 }
 
 /// 列出资源库（data/assets/）下的图片文件名，供前端选图。
