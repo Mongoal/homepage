@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/icon", get(icon_handler))
         .route("/api/assets", get(list_assets_handler).post(upload_asset_handler))
         .route("/api/assets/fetch", get(fetch_asset_handler))
-        .route("/assets/:name", get(asset_handler))
+        .route("/assets/*path", get(asset_handler))
         .route("/api/health", get(health_handler))
         .with_state(state);
 
@@ -214,7 +214,11 @@ async fn upload_asset_handler(
     // sha1(字节内容) 命名：相同图片幂等，不重复存。
     let key = sha1_hex(&bytes);
     let name = format!("{key}.{ext}");
-    let p = state.assets_dir.join(&name);
+    // 上传/转存的图统一存 upload/ 子目录，与资源包（cloud/ai/...）隔离。
+    let upload_dir = state.assets_dir.join("upload");
+    let _ = fs::create_dir_all(&upload_dir).await; // 不存在则建（best-effort）
+    let p = upload_dir.join(&name);
+    let rel = format!("upload/{name}"); // 返回相对路径，前端拼 /assets/upload/xxx
     match fs::File::create(&p).await {
         Ok(mut f) => {
             if let Err(e) = f.write_all(&bytes).await {
@@ -226,7 +230,7 @@ async fn upload_asset_handler(
             let _ = std_file.sync_all();
             Json(serde_json::json!({
                 "name": name,
-                "path": format!("/assets/{name}"),
+                "path": format!("/assets/{rel}"),
             }))
             .into_response()
         }
@@ -252,11 +256,14 @@ async fn fetch_asset_handler(
     if egress_allowed(&q.url, &state.lan_cidrs).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
+    // 代抓的图统一存 upload/ 子目录，与资源包隔离。
+    let upload_dir = state.assets_dir.join("upload");
+    let _ = fs::create_dir_all(&upload_dir).await;
     let key = sha1_hex(q.url.as_bytes());
     match try_fetch(
         &state.http,
         &state.http_lan,
-        &state.assets_dir,
+        &upload_dir,
         &key,
         &q.url,
         None, // 不带 cookie：home Caddy 可收紧，转存兜底不依赖 session
@@ -270,7 +277,7 @@ async fn fetch_asset_handler(
             let name = format!("{key}.{ext}");
             Json(serde_json::json!({
                 "name": name,
-                "path": format!("/assets/{name}"),
+                "path": format!("/assets/upload/{name}"),
             }))
             .into_response()
         }
@@ -289,37 +296,80 @@ fn ctype_to_ext_for(ct: &str) -> &'static str {
         _ => "ico",
     }
 }
+/// 列出资源库（data/assets/，含子目录）。返回树形结构供前端分组展示：
+/// [{ dir: "upload", files: ["a.png", ...] }, { dir: "cloud", files: [...] }]
+/// 根目录散落的文件归到 dir: ""。仅列出图片扩展名。
 async fn list_assets_handler(State(state): State<AppState>) -> Response {
-    let mut names: Vec<String> = Vec::new();
+    #[derive(serde::Serialize)]
+    struct Group {
+        dir: String,
+        files: Vec<String>,
+    }
+    let mut groups: Vec<Group> = Vec::new();
+    // 根目录文件（用户上传/转存，未归入子目录的散落图）。
+    let mut root_files: Vec<String> = Vec::new();
     if let Ok(mut rd) = fs::read_dir(&*state.assets_dir).await {
         while let Ok(Some(entry)) = rd.next_entry().await {
-            if let Some(name) = entry.file_name().to_str() {
-                if ctype_for_filename(name).is_some() {
-                    names.push(name.to_string());
+            let name = match entry.file_name().to_str() { Some(s) => s.to_string(), None => continue };
+            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                // 子目录：列出其中的图片文件。
+                let subdir = entry.path();
+                let mut files: Vec<String> = Vec::new();
+                if let Ok(mut srd) = fs::read_dir(&subdir).await {
+                    while let Ok(Some(se)) = srd.next_entry().await {
+                        if let Some(sn) = se.file_name().to_str() {
+                            if ctype_for_filename(sn).is_some() {
+                                files.push(sn.to_string());
+                            }
+                        }
+                    }
                 }
+                if !files.is_empty() {
+                    files.sort();
+                    groups.push(Group { dir: name, files });
+                }
+            } else if ctype_for_filename(&name).is_some() {
+                root_files.push(name);
             }
         }
     }
-    names.sort();
-    Json(names).into_response()
+    root_files.sort();
+    if !root_files.is_empty() {
+        groups.insert(0, Group { dir: String::new(), files: root_files });
+    }
+    groups.sort_by(|a, b| a.dir.cmp(&b.dir));
+    Json(groups).into_response()
 }
 
-/// 服务单张资源库图片：路径穿越防护 + 仅图片扩展名 + CSP（防 SVG XSS）。
-async fn asset_handler(State(state): State<AppState>, Path(name): Path<String>) -> Response {
-    // 拒绝路径穿越：只允许纯文件名（无目录分隔、无 ..）。
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+/// 服务资源库图片（支持子目录）：路径穿越防护 + 仅图片扩展名 + CSP（防 SVG XSS）。
+/// path 形如 "cloud/Aliyun.png" 或 "upload/abc.png"。每段拒 .. 且规范化后必须在 assets_dir 内。
+async fn asset_handler(State(state): State<AppState>, Path(path): Path<String>) -> Response {
+    // 基本合法性：非空、无反斜杠（统一用 /）、无连续 ..
+    if path.is_empty() || path.contains('\\') || path.contains("..") {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let ctype = match ctype_for_filename(&name) {
+    // 文件名扩展名校验（只放行图片类型）。
+    let fname = path.rsplit('/').next().unwrap_or("");
+    let ctype = match ctype_for_filename(fname) {
         Some(ct) => ct,
-        None => return StatusCode::NOT_FOUND.into_response(), // 非图片扩展名不暴露
+        None => return StatusCode::NOT_FOUND.into_response(),
     };
-    let path = state.assets_dir.join(&name);
-    let bytes = match fs::read(&path).await {
+    // 规范化路径并校验仍在 assets_dir 内（防符号链接/编码绕过等穿越）。
+    let full = match state.assets_dir.join(&path).canonicalize() {
+        Ok(p) => p,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let base = match (*state.assets_dir).canonicalize() {
+        Ok(p) => p,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if !full.starts_with(&base) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let bytes = match fs::read(&full).await {
         Ok(b) => b,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
-    // 复用图标响应的安全头（CSP default-src 'none' 防 SVG 脚本执行）。
     icon_response(bytes, ctype)
 }
 
