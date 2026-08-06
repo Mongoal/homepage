@@ -200,9 +200,14 @@ body.edit .tile.drag-over{outline:2px solid var(--accent);outline-offset:2px}
 /* 资源库选图网格 */
 .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:10px;max-height:46vh;overflow-y:auto;padding:4px}
 .asset-grid .asset{aspect-ratio:1;width:100%;border-radius:12px;overflow:hidden;background:var(--bg);border:2px solid transparent;cursor:pointer;display:grid;place-items:center}
-.asset-grid .asset img{width:100%;height:100%;object-fit:cover}
+.asset-grid .asset img{width:100%;height:100%;object-fit:contain}
 .asset-grid .asset:hover{border-color:var(--accent)}
 .asset-grid .asset.empty{color:var(--muted);font-size:12px;text-align:center;padding:8px}
+/* 资源库：搜索框 + 分类标签 */
+.asset-search{width:100%;padding:8px 12px;border-radius:13px;border:1px solid var(--border);background:var(--bg);color:var(--fg);font-size:14px;margin-bottom:10px;box-sizing:border-box}
+.asset-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.asset-tabs button{padding:4px 12px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--muted);font-size:12px;cursor:pointer}
+.asset-tabs button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 /* 添加磁贴：编辑态隐藏（由 body.edit 控制） */
 body.edit .add-tile{display:none}
 /* IP 模式：协议下拉 + 地址并排 */
@@ -336,7 +341,8 @@ body.edit .add-tile{display:none}
 <div class="modal-bg" id="modalAssets">
   <div class="modal">
     <h3>从资源库选图</h3>
-    <div class="hint" style="margin:0 0 12px">把图片放到 <b>data/assets/</b> 目录后即可在此选择。</div>
+    <input class="asset-search" id="assetSearch" placeholder="搜索图标名称…" autocomplete="off">
+    <div class="asset-tabs" id="assetTabs"></div>
     <div class="asset-grid" id="assetGrid"></div>
     <div class="btn-row" style="margin-top:14px"><button class="btn ghost" id="assetClose">关闭</button></div>
   </div>
@@ -988,23 +994,58 @@ async function fetchImageBlob(url){
 }
 
 // ---- 资源库选图 ----
+// 全局状态：后端返回的树形分组 + 当前选中分类 + 搜索词。
+let assetGroups=[];       // [{dir:"",files:[...]}, {dir:"cloud",files:[...]}]
+let assetTab="";          // 当前分类（""=根目录散落，"upload"/"cloud"/...）
+let assetKw="";           // 搜索关键词
+
 async function openAssets(){
-  const grid=$("#assetGrid");
-  grid.innerHTML=`<div class="asset empty">加载中…</div>`;
   $("#modalAssets").classList.add("open");
-  let names=[];
-  try{ const r=await fetch(`${API}/assets`); if(r.ok) names=await r.json(); }catch(e){}
-  if(!Array.isArray(names) || !names.length){
-    grid.innerHTML=`<div class="asset empty">资源库为空。<br>把图片放到 data/assets/</div>`;
+  $("#assetSearch").value=assetKw;
+  $("#assetGrid").innerHTML=`<div class="asset empty">加载中…</div>`;
+  $("#assetTabs").innerHTML="";
+  try{
+    const r=await fetch(`${API}/assets`);
+    if(r.ok) assetGroups=await r.json();
+  }catch(e){}
+  if(!Array.isArray(assetGroups) || !assetGroups.length){
+    $("#assetGrid").innerHTML=`<div class="asset empty">资源库为空。<br>把图片放到 data/assets/ 或其子目录</div>`;
     return;
   }
+  // 若记忆的分类已不存在（如目录被删），回退到第一个。
+  if(!assetGroups.some(g=>g.dir===assetTab)) assetTab=assetGroups[0].dir;
+  renderAssetTabs();
+  renderAssetGrid();
+}
+
+function renderAssetTabs(){
+  const tabs=$("#assetTabs"); tabs.innerHTML="";
+  assetGroups.forEach(g=>{
+    const label = g.dir==="" ? "根目录" : g.dir;
+    const b=document.createElement("button");
+    b.textContent=`${label} (${g.files.length})`;
+    if(g.dir===assetTab) b.classList.add("active");
+    b.addEventListener("click",()=>{ assetTab=g.dir; renderAssetTabs(); renderAssetGrid(); });
+    tabs.appendChild(b);
+  });
+}
+
+function renderAssetGrid(){
+  const grid=$("#assetGrid");
+  const g=assetGroups.find(x=>x.dir===assetTab);
+  if(!g || !g.files.length){ grid.innerHTML=`<div class="asset empty">此分类无图片</div>`; return; }
+  const kw=assetKw.trim().toLowerCase();
+  const files = kw ? g.files.filter(f=>f.toLowerCase().includes(kw)) : g.files;
+  if(!files.length){ grid.innerHTML=`<div class="asset empty">无匹配图标</div>`; return; }
   grid.innerHTML="";
-  names.forEach(n=>{
+  const dirPrefix = g.dir ? encodeURIComponent(g.dir)+"/" : "";
+  files.forEach(f=>{
     const d=document.createElement("div");
     d.className="asset";
-    d.innerHTML=`<img src="/assets/${encodeURIComponent(n)}" alt="${esc(n)}" loading="lazy">`;
+    d.title=f;
+    d.innerHTML=`<img src="/assets/${dirPrefix}${encodeURIComponent(f)}" alt="${esc(f)}" loading="lazy">`;
     d.addEventListener("click",()=>{
-      $("#fIcon").value=`/assets/${n}`;
+      $("#fIcon").value=`/assets/${g.dir?g.dir+"/":""}${f}`;
       $("#modalAssets").classList.remove("open");
       updatePreview();
     });
@@ -1075,6 +1116,7 @@ function bindGlobal(){
   $("#btnUpload").addEventListener("click",()=>$("#iconFile").click());
   $("#iconFile").addEventListener("change",uploadIconFile);
   $("#assetClose").addEventListener("click",()=>$("#modalAssets").classList.remove("open"));
+  $("#assetSearch").addEventListener("input",e=>{ assetKw=e.target.value; renderAssetGrid(); });
   // 点击遮罩关闭：用 mousedown 而非 click，避免模态内拖选文本释放到遮罩时误关。
   [$("#modalAdd"),$("#modalMenu"),$("#modalAssets")].forEach(m=>m.addEventListener("mousedown",e=>{ if(e.target===m) m.classList.remove("open"); }));
   // PC 换页箭头
