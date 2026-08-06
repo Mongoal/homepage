@@ -21,6 +21,8 @@ regex = "1"
 url = "2"
 # SSRF 防护：解析操作员允许的 LAN CIDR（HOMEPAGE_LAN_CIDRS），仅放行显式允许的内网段。
 ipnet = "2"
+# data:image/...;base64,XXX 解码：转存内联图标为 /assets/<hash>.svg 文件。
+base64 = "0.22"
 
 [profile.release]
 opt-level = "z"      # 最小体积优先
