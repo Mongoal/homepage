@@ -182,9 +182,12 @@ async fn favicon_handler(State(state): State<AppState>) -> Response {
     icon_response(state.favicon.to_vec(), "image/svg+xml")
 }
 
-/// 转存外链图片到资源库（data/assets/）：用户填一个图片 URL，后端下载存为
-/// /assets/<sha1>.<ext>，返回路径供前端回填 site.icon。免去用户 scp/登录 NAS 拷文件。
-/// 复用 try_fetch（继承 SSRF/TLS/重定向/图片校验全套）；入站 cookie 透传给受保护目标。
+/// 转存图片到资源库（data/assets/）：支持两种输入——
+/// 1. http(s) URL：后端下载，复用 try_fetch（继承 SSRF/TLS/重定向/图片校验全套），
+///    透传入站 authelia_session 让受保护应用图标也能转存。
+/// 2. data:image/...;base64,XXX：解码 base64 存盘（无网络请求，无 SSRF 风险）。
+/// 两种都存为 /assets/<sha1>.<ext>，返回路径供前端回填 site.icon。
+/// 用途：避免 data URI 污染 sites.json；免去登录 NAS 拷文件。
 #[derive(serde::Deserialize)]
 struct DownloadAssetBody {
     url: String,
@@ -194,8 +197,21 @@ async fn download_asset_handler(
     headers: HeaderMap,
     Json(body): Json<DownloadAssetBody>,
 ) -> Response {
+    let raw = body.url.as_str();
+    // 分支 1：data:image/... 内联图标 → 解码 base64 存盘。
+    if raw.starts_with("data:image/") {
+        return match save_data_uri(&state.assets_dir, raw).await {
+            Some(name) => Json(serde_json::json!({
+                "name": name,
+                "path": format!("/assets/{name}"),
+            }))
+            .into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
+    // 分支 2：http(s) URL → 下载。
     // SSRF 预检（try_fetch 内部的 get_follow 每跳还会再校验一次）。
-    if egress_allowed(&body.url, &state.lan_cidrs).is_none() {
+    if egress_allowed(raw, &state.lan_cidrs).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
     // 透传入站 authelia_session：让受 Authelia 保护的应用图标也能转存（与 icon_handler 一致）。
@@ -203,13 +219,13 @@ async fn download_asset_handler(
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(extract_authelia_session);
-    let key = sha1_hex(body.url.as_bytes());
+    let key = sha1_hex(raw.as_bytes());
     match try_fetch(
         &state.http,
         &state.http_lan,
         &state.assets_dir,
         &key,
-        &body.url,
+        raw,
         session.as_deref(),
         &state.cookie_domain,
         &state.lan_cidrs,
@@ -227,6 +243,39 @@ async fn download_asset_handler(
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// 解码 data:image/<ext>;base64,<payload> 并存到 assets_dir，文件名 = sha1(raw)+.<ext>。
+/// 校验解码后的字节确实像图片（looks_like_image），拒绝伪造成图片的 HTML/脚本。
+async fn save_data_uri(dir: &PathBuf, raw: &str) -> Option<String> {
+    // 解析 "data:image/<sub>;base64,<payload>"
+    let comma = raw.find(',')?;
+    let (meta, payload) = (&raw[..comma], &raw[comma + 1..]);
+    // meta 形如 "data:image/svg+xml;base64" 或 "data:image/png;base64"
+    if !meta.to_ascii_lowercase().contains("base64") {
+        return None; // 仅支持 base64 编码的 data URI
+    }
+    let mime = meta
+        .strip_prefix("data:")
+        .and_then(|m| m.split(';').next())
+        .filter(|m| m.starts_with("image/"))?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, payload.trim()).ok()?;
+    // 图片校验：拒绝 HTML/脚本伪装成图片（与 try_fetch 一致的防线）。
+    let ctype = mime.to_string();
+    if !looks_like_image(&bytes, Some(&ctype)) {
+        return None;
+    }
+    let ext = ctype_to_ext(mime);
+    let key = sha1_hex(raw.as_bytes()); // 以整串 data URI 为 key，同内容幂等
+    let name = format!("{key}.{ext}");
+    let p = dir.join(&name);
+    if let Ok(mut f) = fs::File::create(&p).await {
+        let _ = f.write_all(&bytes).await;
+        let _ = f.flush().await;
+        let std_file = f.into_std().await;
+        let _ = std_file.sync_all();
+    }
+    Some(name)
 }
 
 /// MIME → 扩展名（ctype_kind/guess_from_magic 的反向映射），供转存命名用。

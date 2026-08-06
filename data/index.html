@@ -489,7 +489,9 @@ function sanitizeSite(s){
   }
   out.name=String(s.name||"").slice(0,40);
   // 图标覆盖：emoji / https / data:image / 同源资源库 /assets/；其余丢弃
-  const ic=String(s.icon||"").trim().slice(0,500);
+  // 注意长度上限：data: URI（尤其 base64 SVG）常远超 500 字符，截断会损坏数据。
+  // 用 200KB 上限防滥用，足够覆盖任何合理的内联图标。
+  const ic=String(s.icon||"").trim().slice(0,200000);
   if(ic){
     if(isEmoji(ic)) out.icon=ic;
     else if(/^data:image\//i.test(ic)) out.icon=ic;
@@ -871,12 +873,12 @@ async function refreshIcons(){
   $("#modalMenu").classList.remove("open");
 }
 
-// 转存外链图片到资源库：填 http(s) 图片 URL → POST /api/assets/download
-// → 后端下载存为 /assets/<sha1>.<ext> → 回填 #fIcon，updatePreview 立即点亮。
-// 用途：找到任意图标链接，不必登录 NAS 拷文件，直接转存到本地资源库。
+// 转存图片到资源库：填 http(s) URL 或 data:image/ 内联图标 → POST /api/assets
+// → 后端下载/解码存为 /assets/<sha1>.<ext> → 回填 #fIcon，updatePreview 立即点亮。
+// 用途：找到任意图标链接不必登录 NAS 拷文件；data URI 也能转成文件避免污染 sites.json。
 async function downloadIcon(){
   const u=$("#fIcon").value.trim();
-  if(!/^https?:\/\//i.test(u)){ alert("请在图标框填入 http(s) 图片链接后再转存"); return; }
+  if(!/^(https?:\/\/|data:image\/)/i.test(u)){ alert("请在图标框填入 http(s) 图片链接或 data:image 内联图标"); return; }
   const btn=$("#btnDl"); const old=btn.textContent;
   btn.textContent="转存中…"; btn.disabled=true;
   try{
