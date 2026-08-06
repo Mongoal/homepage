@@ -880,7 +880,7 @@ async function downloadIcon(){
   const btn=$("#btnDl"); const old=btn.textContent;
   btn.textContent="转存中…"; btn.disabled=true;
   try{
-    const r=await fetch(`${API}/assets/download`,{
+    const r=await fetch(`${API}/assets`,{
       method:"POST",
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({url:u})
