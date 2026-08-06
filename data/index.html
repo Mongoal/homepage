@@ -808,33 +808,38 @@ function toggleEdit(){
   updateFAB();
   if(document.body.classList.contains("edit")){
     bindDragSort(); // 进入编辑：给当前页磁贴绑拖拽
-    // 编辑态下点击 tile 进入编辑
-    document.querySelectorAll(".tile").forEach(t=>{
-      t.addEventListener("click",function stop(e){
-        if(document.body.classList.contains("edit")){
-          if(e.target.closest("[data-del]")) return; // 点删除角标：交给删除逻辑，不进编辑
-          if(drag && drag.suppressClick){ return; }   // 刚拖拽完：忽略本次 click
-          e.preventDefault();
-          const id=t.dataset.id; editingId=id;
-          const s=state.pages[curPage].sites.find(x=>x.id===id);
-          if(s){
-            addType=s.mode||"domain"; setType(addType);
-            $("#modalAddTitle").textContent="编辑站点";
-            $("#editExtras").style.display="flex";
-            if(s.mode==="lan"){
-              try{ const p=new URL(s.url); $("#fScheme").value=p.protocol.replace(":",""); $("#fUrl").value=p.host; }
-              catch(e){ $("#fUrl").value=String(s.url||"").replace(/^https?:\/\//i,""); }
-            } else { $("#fSub").value=s.url||s.subdomain||""; }
-            $("#fName").value=s.name||"";
-            $("#fIcon").value=s.icon||"";
-            $("#modalAdd").classList.add("open");
-            updatePreview();
-          }
-        }
-      },{capture:true});
-    });
   }
 }
+
+// 编辑态点击 tile 进入编辑（事件委托：document 绑一次，不随 render 重建丢失）。
+// 修问题4：原先 toggleEdit 给当时存在的 .tile 逐个绑 click，saveFromModal→render 重建 DOM 后
+// 新 tile 无绑定 → 点击走 <a href> 跳转。改用委托后 render 不影响事件捕获。
+document.addEventListener("click",function(e){
+  if(!document.body.classList.contains("edit")) return;
+  const tile=e.target.closest(".tile");
+  if(!tile) return;
+  if(e.target.closest("[data-del]")) return; // 点删除角标：交给删除逻辑，不进编辑
+  if(e.target.closest("[data-add]")) return;  // 加号磁贴：交给添加逻辑
+  if(drag && drag.suppressClick){ return; }   // 刚拖拽完：忽略本次 click
+  const id=tile.dataset.id;
+  if(!id) return;
+  e.preventDefault();
+  editingId=id;
+  const s=state.pages[curPage].sites.find(x=>x.id===id);
+  if(s){
+    addType=s.mode||"domain"; setType(addType);
+    $("#modalAddTitle").textContent="编辑站点";
+    $("#editExtras").style.display="flex";
+    if(s.mode==="lan"){
+      try{ const p=new URL(s.url); $("#fScheme").value=p.protocol.replace(":",""); $("#fUrl").value=p.host; }
+      catch(_){ $("#fUrl").value=String(s.url||"").replace(/^https?:\/\//i,""); }
+    } else { $("#fSub").value=s.url||s.subdomain||""; }
+    $("#fName").value=s.name||"";
+    $("#fIcon").value=s.icon||"";
+    $("#modalAdd").classList.add("open");
+    updatePreview();
+  }
+},{capture:true});
 
 // ---- 导入导出 ----
 function doExport(){
