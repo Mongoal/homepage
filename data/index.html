@@ -85,7 +85,7 @@ body.edit #btnEdit{display:none}
   overflow:hidden;background:var(--bg-elev);
   box-shadow:0 1px 3px rgba(0,0,0,.25);
 }
-.tile .ico img{width:100%;height:100%;object-fit:cover}
+.tile .ico img{width:100%;height:100%;object-fit:contain}
 .tile .ico .letter{
   width:100%;height:100%;display:grid;place-items:center;
   font-size:26px;font-weight:700;color:#fff;
@@ -179,7 +179,7 @@ body.edit .tile.drag-over{outline:2px solid var(--accent);outline-offset:2px}
 .seg button.on{background:var(--accent);color:#fff}
 .preview-row{display:flex;align-items:center;gap:12px;margin:6px 0 16px}
 .preview-row .ico{width:50px;height:50px;border-radius:14px;overflow:hidden;background:var(--bg);display:grid;place-items:center;box-shadow:0 1px 3px rgba(0,0,0,.25)}
-.preview-row .ico img{width:100%;height:100%}
+.preview-row .ico img{width:100%;height:100%;object-fit:contain}
 .preview-row .url{font-size:12px;color:var(--muted);word-break:break-all;flex:1}
 .btn-row{display:flex;gap:10px;margin-top:8px}
 .btn{
@@ -277,6 +277,8 @@ body.edit .add-tile{display:none}
         <input id="fIcon" placeholder="🔒 或 https://.../icon.png" autocomplete="off">
         <button type="button" id="btnAsset">资源库</button>
         <button type="button" id="btnDl" title="下载外链图片到资源库，避免外链失效/混合内容">转存</button>
+        <button type="button" id="btnUpload" title="上传本地图片文件到资源库">上传</button>
+        <input type="file" id="iconFile" accept="image/*" style="display:none">
       </div>
       <div class="hint">留空 = 自动从站点取 favicon；填 emoji / 图片 URL，或点“资源库”从本地图片选。</div>
     </div>
@@ -345,6 +347,7 @@ body.edit .add-tile{display:none}
 const LS_KEY="homepage_v1";
 const BOX_H_KEY="homepage_boxh"; // 盒子高度偏好：仅存本地（设备相关，不同步后端）
 const COLS_KEY="homepage_cols";  // 每行图标数：仅存本地（设备相关，不同步后端）
+const PAGE_KEY="homepage_page"; // 当前分页：仅存本地（设备相关，不同步后端）
 const API="/api";
 
 // ---- 状态 ----
@@ -555,6 +558,10 @@ function render(){
   });
   bindTiles();
   bindDragSort();
+  // 恢复上次所在分页的滚动位置（render 重建 DOM 后 scrollLeft 被重置为 0）。
+  // 越界保护：后端 pages 数量变化时 clamp 到合法范围。
+  curPage=Math.max(0,Math.min(curPage,state.pages.length-1));
+  wrap.scrollLeft=curPage*window.innerWidth;
 }
 
 function bindTiles(){
@@ -658,8 +665,13 @@ function bindDragSort(){
 // ---- 页面切换 ----
 function scrollToPage(i){
   curPage=(i+state.pages.length)%state.pages.length;
+  try{ localStorage.setItem(PAGE_KEY,String(curPage)); }catch(_){}
   $("#pages").scrollTo({left:curPage*window.innerWidth,behavior:"smooth"});
   updateDots(); updateFAB();
+}
+// 启动时恢复上次所在分页（设备相关，仅本地）。
+function loadPage(){
+  try{ const s=localStorage.getItem(PAGE_KEY); if(s!=null){ const n=Number(s); if(Number.isInteger(n) && n>=0 && n<state.pages.length) curPage=n; } }catch(_){}
 }
 function updateDots(){
   document.querySelectorAll("#dots .dot").forEach((d,i)=>d.classList.toggle("on",i===curPage));
@@ -873,53 +885,88 @@ async function refreshIcons(){
   $("#modalMenu").classList.remove("open");
 }
 
-// 转存图片到资源库：前端把"预览看到的图片"转成 Blob 上传给后端，所见即所得。
-// 流程：填 URL → 浏览器加载 <img>（带用户 cookie，受保护应用也能预览）→
-//       点转存 → fetch 原始 Blob（优先，保格式）→ 失败降级 canvas → PNG。
-// 后端只接收字节不发 HTTP 请求，无需 authelia_session；home 的 Caddy 可收紧。
+// 转存图片到资源库。三级降级保证覆盖所有场景：
+//   1. 前端 fetch 原始 Blob（同源/有 CORS 头的跨域；保 SVG/PNG 原格式）→ POST 字节
+//   2. img+canvas 转 PNG（img 能加载但 fetch 被 CORS 挡；SVG 光栅化）→ POST 字节
+//   3. 后端代抓（img 也读不到内容，如 OpenWrt 无 CORS 头的跨域图）→ GET /api/assets/fetch
+// data: URI 走路径 1（fetch data: 不受 CORS 限制）。
 async function downloadIcon(){
   const u=$("#fIcon").value.trim();
   if(!/^(https?:\/\/|data:image\/)/i.test(u)){ alert("请在图标框填入 http(s) 图片链接或 data:image 内联图标"); return; }
   const btn=$("#btnDl"); const old=btn.textContent;
   btn.textContent="转存中…"; btn.disabled=true;
   try{
+    // 路径 1+2：前端拿 Blob 上传。
     const blob = await fetchImageBlob(u);
-    if(!blob){ alert("转存失败：图片加载失败或跨域受限"); return; }
-    const r=await fetch(`${API}/assets`,{
-      method:"POST",
-      headers:{'Content-Type':blob.type||'image/png'},
-      body:blob
-    });
-    if(!r.ok){ alert("转存失败：后端拒收（内容可能不是图片）"); return; }
-    const data=await r.json();
-    $("#fIcon").value=data.path;   // 回填 /assets/xxx.png
-    updatePreview();
+    if(blob){
+      const r=await fetch(`${API}/assets`,{
+        method:"POST",
+        headers:{'Content-Type':blob.type||'image/png'},
+        body:blob
+      });
+      if(r.ok){
+        const data=await r.json();
+        $("#fIcon").value=data.path; updatePreview();
+        return;
+      }
+    }
+    // 路径 3：前端拿不到内容（CORS+tainted），交给后端代抓（无 CORS 限制）。
+    if(/^https?:\/\//i.test(u)){
+      const r=await fetch(`${API}/assets/fetch?url=${encodeURIComponent(u)}`);
+      if(r.ok){
+        const data=await r.json();
+        $("#fIcon").value=data.path; updatePreview();
+        return;
+      }
+    }
+    alert("转存失败：图片加载失败或非图片内容（可尝试「上传」按钮手动选文件）");
   }catch(e){ alert("网络错误，转存失败"); }
   finally{ btn.textContent=old; btn.disabled=false; }
 }
 
-// 把图片 URL 转成 Blob。优先 fetch 原始字节（保 SVG/PNG 原格式）；
-// CORS 拦截时降级 <img>+canvas 导出 PNG（受保护站点 fetch 被 CORS 挡但 <img> 能加载）。
+// 上传本地图片文件到资源库（万能兜底）：用户右键另存/截图后选文件。
+// 覆盖前端 fetch 被 CORS 挡且后端代抓也失败的场景。
+async function uploadIconFile(e){
+  const file=e.target.files[0]; if(!file) return;
+  e.target.value=""; // 允许重复选同一文件
+  if(!/^image\//i.test(file.type)){ alert("请选择图片文件"); return; }
+  const btn=$("#btnUpload"); const old=btn.textContent;
+  btn.textContent="上传中…"; btn.disabled=true;
+  try{
+    const r=await fetch(`${API}/assets`,{
+      method:"POST",
+      headers:{'Content-Type':file.type},
+      body:file
+    });
+    if(!r.ok){ alert("上传失败：后端拒收（内容可能不是图片）"); return; }
+    const data=await r.json();
+    $("#fIcon").value=data.path; updatePreview();
+  }catch(_){ alert("网络错误，上传失败"); }
+  finally{ btn.textContent=old; btn.disabled=false; }
+}
+
+// 把图片 URL/data: 转成 Blob（前端侧）。成功返回 Blob，失败返回 null。
+// 路径 1：fetch 原始字节（保格式；跨域需对方 CORS 头，否则抛错进路径 2）。
+// 路径 2：img + canvas → PNG（img 能加载但无 CORS 头时，canvas 会被 tainted，
+//         toBlob 抛 SecurityError → 返回 null，交给后端代抓）。
 async function fetchImageBlob(url){
-  // 路径 1：fetch 原始 Blob（同源/data: 直连；跨域需对方发 CORS 头）。
   try{
     const r=await fetch(url,{mode:"cors",credentials:"include"});
     if(r.ok){
       const ct=r.headers.get("content-type")||"";
       if(ct.startsWith("image/")) return await r.blob();
     }
-  }catch(_){ /* CORS/网络失败 → 降级 canvas */ }
-  // 路径 2：img + canvas（兜底；SVG 会光栅化为 PNG）。
+  }catch(_){ /* CORS/网络失败 → 试 canvas */ }
   return await new Promise((resolve)=>{
     const img=new Image();
-    img.crossOrigin="anonymous"; // 尝试走 CORS；失败则 onerror
+    img.crossOrigin="anonymous";
     img.onload=()=>{
       try{
         const c=document.createElement("canvas");
         c.width=img.naturalWidth||64; c.height=img.naturalHeight||64;
         c.getContext("2d").drawImage(img,0,0,c.width,c.height);
         c.toBlob(b=>resolve(b), "image/png");
-      }catch(_){ resolve(null); } // canvas tainted（跨域无 CORS）
+      }catch(_){ resolve(null); }
     };
     img.onerror=()=>resolve(null);
     img.src=url;
@@ -956,6 +1003,7 @@ async function boot(){
   loadLocal();
   loadBoxH(); // 应用本地盒子高度偏好（render 前设好 CSS 变量）
   loadCols(); // 应用本地每行图标数偏好
+  loadPage(); // 恢复上次所在分页（render 前设好 curPage）
   // 先用本地缓存秒渲染（离线/首屏快）
   render();
   // 再从后端拉取最新，覆盖本地（以服务端为准）
@@ -1010,14 +1058,18 @@ function bindGlobal(){
   // 资源库选图
   $("#btnAsset").addEventListener("click",openAssets);
   $("#btnDl").addEventListener("click",downloadIcon);
+  $("#btnUpload").addEventListener("click",()=>$("#iconFile").click());
+  $("#iconFile").addEventListener("change",uploadIconFile);
   $("#assetClose").addEventListener("click",()=>$("#modalAssets").classList.remove("open"));
-  // 点击遮罩关闭
-  [$("#modalAdd"),$("#modalMenu"),$("#modalAssets")].forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
+  // 点击遮罩关闭：用 mousedown 而非 click，避免模态内拖选文本释放到遮罩时误关。
+  [$("#modalAdd"),$("#modalMenu"),$("#modalAssets")].forEach(m=>m.addEventListener("mousedown",e=>{ if(e.target===m) m.classList.remove("open"); }));
   // PC 换页箭头
   $("#navPrev").addEventListener("click",()=>scrollToPage(curPage-1));
   $("#navNext").addEventListener("click",()=>scrollToPage(curPage+1));
-  // 键盘左右切换
+  // 键盘左右切换：输入框聚焦时不拦截（让方向键移动光标）。
   document.addEventListener("keydown",e=>{
+    const t=document.activeElement;
+    if(t && (t.tagName==="INPUT"||t.tagName==="TEXTAREA"||t.isContentEditable)) return;
     if(e.key==="ArrowLeft")scrollToPage(curPage-1);
     if(e.key==="ArrowRight")scrollToPage(curPage+1);
   });
