@@ -206,6 +206,11 @@ async fn upload_asset_handler(
     if !looks_like_image(&bytes, Some(ctype)) {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "内容不像图片").into_response();
     }
+    // SVG 额外净化：拒绝含脚本/事件处理器/外部引用的 SVG（防存储型 XSS）。
+    // CSP 已挡 default-src 'none'，但纵深防御——输入侧拒收更稳。
+    if ctype.contains("svg") && !svg_is_safe(&bytes) {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "SVG 含不安全内容").into_response();
+    }
     // sha1(字节内容) 命名：相同图片幂等，不重复存。
     let key = sha1_hex(&bytes);
     let name = format!("{key}.{ext}");
@@ -668,6 +673,47 @@ fn looks_like_image(bytes: &[u8], ctype: Option<&str>) -> bool {
         return ctype.map(|c| c.contains("svg")).unwrap_or(true);
     }
     true
+}
+
+/// SVG 安全净化：拒绝含脚本/事件处理器/外部资源引用的 SVG。
+/// 这些是 SVG XSS 的主要载体——即便 CSP 挡 default-src 'none'，
+/// <foreignObject>、data: URI、内联事件等仍有绕过手法，输入侧拒收最稳。
+/// 大小写不敏感；匹配标签/属性名边界，避免误伤正常路径数据。
+fn svg_is_safe(bytes: &[u8]) -> bool {
+    let s = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return false, // 非 UTF-8 的 SVG 不合法，拒
+    };
+    let low = s.to_ascii_lowercase();
+    // 危险子串：标签与属性名都用小写匹配。
+    const BLOCKED: &[&str] = &[
+        "<script",           // 脚本块
+        "javascript:",       // javascript: 伪协议
+        "onload=",           // 事件处理器（含 on+事件）
+        "onerror=",
+        "onclick=",
+        "onmouseover=",
+        "<foreignobject",    // 可嵌套 HTML，绕过 SVG 沙箱
+        "<use href=\"data:", // data: URI 引用（可执行）
+        "xlink:href=\"data:",
+        "<a href=\"javascript",
+    ];
+    // 通配 on* 事件处理器：匹配 " on" + 字母 + "=" 的模式（捕获 onchange/oninput 等）。
+    if low.contains(" on") {
+        // 简单启发式：' on' 后跟字母再跟 '='，视为事件处理器。
+        let bytes = low.as_bytes();
+        let mut i = 0;
+        while let Some(pos) = low[i..].find(" on") {
+            let start = i + pos + 3;
+            if let Some(end) = bytes[start..].iter().position(|&b| b == b'=' || !b.is_ascii_alphabetic()) {
+                if bytes[start + end - 1] == b'=' && end > 1 {
+                    return false; // ' on<letters>=' 命中
+                }
+            }
+            i = start;
+        }
+    }
+    !BLOCKED.iter().any(|b| low.contains(b))
 }
 
 async fn load_cached_icon(dir: &PathBuf, key: &str) -> Option<CachedIcon> {
