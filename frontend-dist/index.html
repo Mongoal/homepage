@@ -276,6 +276,7 @@ body.edit .add-tile{display:none}
       <div class="icon-row">
         <input id="fIcon" placeholder="🔒 或 https://.../icon.png" autocomplete="off">
         <button type="button" id="btnAsset">资源库</button>
+        <button type="button" id="btnDl" title="下载外链图片到资源库，避免外链失效/混合内容">转存</button>
       </div>
       <div class="hint">留空 = 自动从站点取 favicon；填 emoji / 图片 URL，或点“资源库”从本地图片选。</div>
     </div>
@@ -870,6 +871,28 @@ async function refreshIcons(){
   $("#modalMenu").classList.remove("open");
 }
 
+// 转存外链图片到资源库：填 http(s) 图片 URL → POST /api/assets/download
+// → 后端下载存为 /assets/<sha1>.<ext> → 回填 #fIcon，updatePreview 立即点亮。
+// 用途：找到任意图标链接，不必登录 NAS 拷文件，直接转存到本地资源库。
+async function downloadIcon(){
+  const u=$("#fIcon").value.trim();
+  if(!/^https?:\/\//i.test(u)){ alert("请在图标框填入 http(s) 图片链接后再转存"); return; }
+  const btn=$("#btnDl"); const old=btn.textContent;
+  btn.textContent="转存中…"; btn.disabled=true;
+  try{
+    const r=await fetch(`${API}/assets/download`,{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:u})
+    });
+    if(!r.ok){ alert("转存失败：可能是非图片、目标不可达、或需要登录态"); return; }
+    const data=await r.json();
+    $("#fIcon").value=data.path;   // 回填 /assets/xxx.png
+    updatePreview();                // 预览点亮（/assets/ 已在 preview 白名单）
+  }catch(e){ alert("网络错误，转存失败"); }
+  finally{ btn.textContent=old; btn.disabled=false; }
+}
+
 // ---- 资源库选图 ----
 async function openAssets(){
   const grid=$("#assetGrid");
@@ -953,6 +976,7 @@ function bindGlobal(){
   $("#setBoxH").addEventListener("change",e=>{ const v=applyBoxH(e.target.value); try{ localStorage.setItem(BOX_H_KEY,String(v)); }catch(_){} });
   // 资源库选图
   $("#btnAsset").addEventListener("click",openAssets);
+  $("#btnDl").addEventListener("click",downloadIcon);
   $("#assetClose").addEventListener("click",()=>$("#modalAssets").classList.remove("open"));
   // 点击遮罩关闭
   [$("#modalAdd"),$("#modalMenu"),$("#modalAssets")].forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
