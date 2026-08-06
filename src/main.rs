@@ -148,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/import", post(import_handler))
         .route("/api/icon", get(icon_handler))
         .route("/api/assets", get(list_assets_handler).post(upload_asset_handler))
+        .route("/api/assets/fetch", get(fetch_asset_handler))
         .route("/assets/:name", get(asset_handler))
         .route("/api/health", get(health_handler))
         .with_state(state);
@@ -231,7 +232,58 @@ async fn upload_asset_handler(
     }
 }
 
-/// 列出资源库（data/assets/）下的图片文件名，供前端选图。
+/// 后端代抓图片到资源库（兜底用）：前端 fetch 受 CORS 限制时调用。
+/// 后端直接 HTTP GET，无 CORS 限制。不抽 authelia_session（保持 home Caddy 可收紧）。
+/// 覆盖场景：OpenWrt 等无 CORS 头的跨域图片（LAN 模式）；公网图片。
+#[derive(serde::Deserialize)]
+struct FetchAssetQuery {
+    url: String,
+}
+async fn fetch_asset_handler(
+    State(state): State<AppState>,
+    Query(q): Query<FetchAssetQuery>,
+) -> Response {
+    // SSRF 预检（try_fetch 内部的 get_follow 每跳还会再校验一次）。
+    if egress_allowed(&q.url, &state.lan_cidrs).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let key = sha1_hex(q.url.as_bytes());
+    match try_fetch(
+        &state.http,
+        &state.http_lan,
+        &state.assets_dir,
+        &key,
+        &q.url,
+        None, // 不带 cookie：home Caddy 可收紧，转存兜底不依赖 session
+        "",
+        &state.lan_cidrs,
+    )
+    .await
+    {
+        Some(f) => {
+            let ext = ctype_to_ext_for(f.ctype);
+            let name = format!("{key}.{ext}");
+            Json(serde_json::json!({
+                "name": name,
+                "path": format!("/assets/{name}"),
+            }))
+            .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// MIME → 扩展名（ctype_kind/guess_from_magic 的反向映射），供转存命名用。
+fn ctype_to_ext_for(ct: &str) -> &'static str {
+    match ct {
+        "image/svg+xml" => "svg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        _ => "ico",
+    }
+}
 async fn list_assets_handler(State(state): State<AppState>) -> Response {
     let mut names: Vec<String> = Vec::new();
     if let Ok(mut rd) = fs::read_dir(&*state.assets_dir).await {
