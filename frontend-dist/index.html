@@ -907,7 +907,10 @@ async function boot(){
     const r=await fetch(`${API}/sites`);
     if(r.ok){
       const sv=await r.json();
-      if(sv && sv.pages){ state=sv; ensureShape(); sanitizeState(); saveLocal(); render(); }
+      // 只要服务端响应成功就以它为准（含空 {}：ensureShape 会补两个空页）。
+      // 之前用 if(sv && sv.pages) 判断，导致后端 sites.json 被删（返回 {}）时不覆盖，
+      // 本地 localStorage 旧缓存持续显示——删了数据磁贴还在。
+      state=sv; ensureShape(); sanitizeState(); saveLocal(); render();
     }
   }catch(e){}
   bindGlobal();
