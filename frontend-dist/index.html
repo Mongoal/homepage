@@ -790,8 +790,22 @@ function saveFromModal(){
   const targetId = site.mode==="lan" ? "lan" : "domain";
   const pg = state.pages.find(p=>p.id===targetId);
   if(editingId){
-    state.pages.forEach(p=>{ p.sites=p.sites.filter(s=>s.id!==editingId); });
-    pg.sites.push(site);
+    // 编辑：同页原地替换（保序）；跨页则从原页删除后追加到新页末尾。
+    let moved=false;
+    for(const p of state.pages){
+      const idx=p.sites.findIndex(s=>s.id===editingId);
+      if(idx>=0){
+        if(p.id===targetId){
+          p.sites[idx]=site; // 同页：原地替换，顺序不变
+        }else{
+          p.sites.splice(idx,1); // 跨页：从原页删除
+          pg.sites.push(site);    // 追加到新页末尾
+        }
+        moved=true;
+        break;
+      }
+    }
+    if(!moved){ pg.sites.push(site); } // 兜底：未找到原站点（异常），直接追加
   }else{
     pg.sites.push(site);
   }
