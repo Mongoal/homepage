@@ -466,15 +466,20 @@ function sanitizeSite(s){
   const mode = (s.mode==="lan")?"lan":"domain";
   const out={id:String(s.id||uid()).replace(/[^a-z0-9_-]/gi,"").slice(0,40)||uid(), mode};
   if(mode==="lan"){
-    // LAN：必须是合法 http(s) URL
+    // LAN：必须是合法 http(s) URL，保留路径（如 /admin）
     let url=String(s.url||"").trim();
-    try{ if(/^https?:\/\//i.test(url)){ const p=new URL(url); out.url=p.protocol+"//"+p.host; } else return null; }
-    catch(e){ return null; }
+    try{
+      if(/^https?:\/\//i.test(url)){
+        const p=new URL(url);
+        out.url=p.protocol+"//"+p.host+p.pathname+p.search; // 保留 path+query，丢 hash
+      } else return null;
+    } catch(e){ return null; }
   }else{
     // 域名模式：优先看是否填了完整 URL（url 字段，或 subdomain 里带 scheme）
     const raw=String(s.url||s.subdomain||"").trim();
     if(/^https?:\/\//i.test(raw)){
-      try{ const p=new URL(raw); out.url=p.protocol+"//"+p.host; }catch(e){ return null; }
+      // 完整 URL 原样保留（含路径，如 https://vw.x:4321/admin）
+      try{ const p=new URL(raw); out.url=p.protocol+"//"+p.host+p.pathname+p.search; }catch(e){ return null; }
     }else{
       const sub=raw.toLowerCase().replace(/[^a-z0-9.-]/g,"").slice(0,63);
       if(!sub) return null;
