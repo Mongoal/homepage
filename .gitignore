@@ -16,4 +16,10 @@ target/
 
 # AI agent 指导文件（开发者本地使用，无需同步）
 AGENTS.md
+
+# 个人文档
 docs/
+
+# 部署相关
+deploy/
+
