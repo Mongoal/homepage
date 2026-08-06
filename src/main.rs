@@ -637,7 +637,9 @@ fn cookie_for(url: &str, session: Option<&str>, cookie_domain: &str) -> Option<S
     let session = session?;
     let host = host_of(url)?;
     if host_matches_domain(host, cookie_domain) {
-        Some(format!("authelia_session={session}"))
+        // session 已是完整 "authelia_session=值"（见 extract_authelia_session），原样返回。
+        // 之前这里误用 format!("authelia_session={session}") 造成双重前缀，损坏 cookie 值。
+        Some(session.to_string())
     } else {
         None
     }
